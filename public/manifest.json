@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "Browser Agent Recorder",
+  "description": "Record browser workflows and export local SOPs and Agent Skill Packs.",
+  "version": "0.1.0",
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Browser Agent Recorder"
+  },
+  "background": {
+    "service_worker": "assets/background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["assets/content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "permissions": ["activeTab", "tabs", "storage"],
+  "host_permissions": ["<all_urls>"],
+  "web_accessible_resources": [
+    {
+      "resources": ["editor.html"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}
