@@ -1,12 +1,21 @@
 import { buildElementTarget } from "../shared/selector";
 import { isSensitiveField } from "../shared/sanitize";
-import type { ActionPayload, ActionType, AppResponse, RecordingState, ValuePolicy } from "../shared/types";
+import type {
+  ActionPayload,
+  ActionType,
+  AppResponse,
+  DialogInfo,
+  RecordingState,
+  ValuePolicy,
+  ViewportInfo
+} from "../shared/types";
 
 let recordingState: RecordingState = { status: "idle" };
 const inputTimers = new WeakMap<Element, number>();
 const earlyClickTargets = new WeakMap<Element, number>();
 let clientSequence = 0;
 let lastNavigationUrl = location.href;
+let composing = false;
 
 function send<T>(message: unknown): Promise<AppResponse<T>> {
   return chrome.runtime.sendMessage(message);
@@ -30,6 +39,16 @@ function pageInfo() {
   };
 }
 
+function viewportInfo(): ViewportInfo {
+  return {
+    width: window.innerWidth,
+    height: window.innerHeight,
+    scrollX: window.scrollX,
+    scrollY: window.scrollY,
+    devicePixelRatio: window.devicePixelRatio || 1
+  };
+}
+
 function interactiveAncestor(element: Element) {
   return (
     element.closest("button,a,[role='button'],[role='link'],input[type='button'],input[type='submit']") || element
@@ -40,7 +59,7 @@ function meaningfulTarget(event: Event): Element | null {
   const path = typeof event.composedPath === "function" ? event.composedPath() : [];
   const node = (path.find((entry) => entry instanceof Element) as Element | undefined) || (event.target instanceof Element ? event.target : null);
   if (!node) return null;
-  const rawTarget = node.closest("button,a,input,textarea,select,label,[role],summary,[contenteditable='true'],svg,path,use") || node;
+  const rawTarget = node.closest("button,a,input,textarea,select,label,[role],summary,[contenteditable='true'],svg,path,use,td,th") || node;
   return interactiveAncestor(rawTarget);
 }
 
@@ -48,9 +67,18 @@ function isFormValueControl(element: Element) {
   return element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement;
 }
 
+function isContentEditable(element: Element): boolean {
+  if (!(element instanceof HTMLElement)) return false;
+  return element.isContentEditable;
+}
+
+function isInputtable(element: Element) {
+  return isFormValueControl(element) || isContentEditable(element);
+}
+
 function shouldRecordClick(target: Element) {
   if (target instanceof HTMLInputElement) {
-    return ["button", "submit", "reset", "image"].includes(target.type);
+    return ["button", "submit", "reset", "image", "checkbox", "radio"].includes(target.type);
   }
   if (target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return false;
   if (target.tagName.toLowerCase() === "label") return false;
@@ -62,7 +90,7 @@ function looksLikeInteractive(target: Element) {
   if (tag === "a" || tag === "button") return true;
   if (target instanceof HTMLInputElement) return ["button", "submit", "reset", "image"].includes(target.type);
   const role = target.getAttribute("role");
-  return Boolean(role && /^(button|link|menuitem|tab|option)$/i.test(role));
+  return Boolean(role && /^(button|link|menuitem|tab|option|checkbox|radio)$/i.test(role));
 }
 
 function valueFor(element: Element) {
@@ -75,16 +103,37 @@ function valueFor(element: Element) {
   return undefined;
 }
 
+function valueLabelFor(element: Element): string | undefined {
+  // <select>: surface the visible option text alongside the raw value so
+  // humans can read "United States" while replay still uses "us".
+  if (element instanceof HTMLSelectElement) {
+    const opt = element.selectedOptions[0];
+    if (opt) return (opt.label || opt.textContent || opt.value).trim() || undefined;
+  }
+  if (element instanceof HTMLInputElement && (element.type === "radio" || element.type === "checkbox")) {
+    const label = element.labels?.[0];
+    const text = label?.textContent?.trim();
+    if (text) return text;
+    const wrapping = element.closest("label");
+    return wrapping?.textContent?.trim() || undefined;
+  }
+  return undefined;
+}
+
 function policyFor(element: Element, sensitive: boolean): ValuePolicy {
   if (sensitive) return "runtime";
-  if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement) return "literal";
+  if (isInputtable(element)) return "literal";
   return "none";
 }
 
-function actionFromEvent(type: ActionType, event: Event, key?: string): ActionPayload | null {
-  if (!event.isTrusted) return null;
-  const target = meaningfulTarget(event);
-  if (!target) return null;
+interface BuildOptions {
+  type: ActionType;
+  target: Element;
+  key?: string;
+  override?: Partial<ActionPayload>;
+}
+
+function buildAction({ type, target, key, override }: BuildOptions): ActionPayload {
   const input = target as HTMLInputElement;
   const sensitive = isSensitiveField({
     type: input.getAttribute("type"),
@@ -94,24 +143,44 @@ function actionFromEvent(type: ActionType, event: Event, key?: string): ActionPa
     placeholder: input.getAttribute("placeholder"),
     ariaLabel: input.getAttribute("aria-label")
   });
-  return {
+  const payload: ActionPayload = {
     clientEventId: `evt_${Date.now()}_${++clientSequence}`,
     clientSequence,
     type,
     page: pageInfo(),
     target: buildElementTarget(target),
     value: sensitive ? undefined : valueFor(target),
+    valueLabel: valueLabelFor(target),
     key,
     valuePolicy: policyFor(target, sensitive),
     sensitive,
     highRisk: type === "submit",
-    devicePixelRatio: window.devicePixelRatio || 1
+    devicePixelRatio: window.devicePixelRatio || 1,
+    viewport: viewportInfo(),
+    frameUrl: window !== window.top ? location.href : undefined,
+    ...override
   };
+  return payload;
+}
+
+function actionFromEvent(type: ActionType, event: Event, key?: string): ActionPayload | null {
+  if (!event.isTrusted) return null;
+  const target = meaningfulTarget(event);
+  if (!target) return null;
+  return buildAction({ type, target, key });
 }
 
 async function record(payload: ActionPayload | null) {
   if (!payload || recordingState.status !== "recording") return;
   await send({ type: "action:record", payload });
+}
+
+function flushInput(target: Element) {
+  const timer = inputTimers.get(target);
+  if (!timer) return;
+  window.clearTimeout(timer);
+  inputTimers.delete(target);
+  void record(buildAction({ type: "input", target, override: { composedInput: true } }));
 }
 
 function onPointerDown(event: PointerEvent) {
@@ -130,14 +199,50 @@ function onClick(event: MouseEvent) {
   void record(actionFromEvent("click", event));
 }
 
-function onInput(event: Event) {
+function onDoubleClick(event: MouseEvent) {
   const target = meaningfulTarget(event);
-  if (!target || !isFormValueControl(target)) return;
+  if (!target) return;
+  void record(actionFromEvent("doubleclick", event));
+}
+
+function onContextMenu(event: MouseEvent) {
+  const target = meaningfulTarget(event);
+  if (!target) return;
+  void record(actionFromEvent("rightclick", event));
+}
+
+function onInput(event: Event) {
+  // Skip IME intermediate states; the post-compositionend input event will
+  // catch the committed value.
+  if (composing) return;
+  const inputEvent = event as InputEvent;
+  if (typeof inputEvent.isComposing === "boolean" && inputEvent.isComposing) return;
+
+  const target = meaningfulTarget(event);
+  if (!target || !isInputtable(target)) return;
   const existing = inputTimers.get(target);
   if (existing) window.clearTimeout(existing);
   const timer = window.setTimeout(() => {
     void record(actionFromEvent("input", event));
   }, 450);
+  inputTimers.set(target, timer);
+}
+
+function onCompositionStart() {
+  composing = true;
+}
+
+function onCompositionEnd(event: CompositionEvent) {
+  composing = false;
+  const target = meaningfulTarget(event);
+  if (!target || !isInputtable(target)) return;
+  // Schedule a short follow-up emit so the committed string lands as one
+  // recorded action without racing the next keystroke.
+  const existing = inputTimers.get(target);
+  if (existing) window.clearTimeout(existing);
+  const timer = window.setTimeout(() => {
+    void record(buildAction({ type: "input", target }));
+  }, 80);
   inputTimers.set(target, timer);
 }
 
@@ -152,24 +257,25 @@ function onChange(event: Event) {
 }
 
 function onSubmit(event: Event) {
+  const form = event.target;
+  // Flush any pending input debounces on this form's fields so the final
+  // values land before the submit action.
+  if (form instanceof HTMLFormElement) {
+    for (const el of Array.from(form.elements)) {
+      if (el instanceof Element && inputTimers.has(el)) flushInput(el);
+    }
+  }
   void record(actionFromEvent("submit", event));
 }
 
-function modifierComboKey(event: KeyboardEvent) {
-  if (!event.ctrlKey && !event.metaKey && !event.altKey) return null;
-  const key = event.key;
-  // Ignore bare modifier keys; only record when a real key is pressed alongside.
-  if (["Control", "Meta", "Alt", "Shift"].includes(key)) return null;
-  const parts: string[] = [];
-  if (event.ctrlKey) parts.push("Ctrl");
-  if (event.metaKey) parts.push("Meta");
-  if (event.altKey) parts.push("Alt");
-  if (event.shiftKey) parts.push("Shift");
-  parts.push(key.length === 1 ? key.toUpperCase() : key);
-  return parts.join("+");
-}
-
 function onKeydown(event: KeyboardEvent) {
+  // Flush input debounce on commit-style keys so the value is recorded
+  // before the key action (e.g., Enter that submits the field).
+  if (["Enter", "Tab", "Escape"].includes(event.key)) {
+    const target = meaningfulTarget(event);
+    if (target && inputTimers.has(target)) flushInput(target);
+  }
+
   const combo = modifierComboKey(event);
   if (combo) {
     void record(actionFromEvent("keydown", event, combo));
@@ -178,6 +284,24 @@ function onKeydown(event: KeyboardEvent) {
   if (["Enter", "Tab", "Escape"].includes(event.key)) {
     void record(actionFromEvent("keydown", event, event.key));
   }
+}
+
+function onBlur(event: FocusEvent) {
+  const target = event.target;
+  if (target instanceof Element && inputTimers.has(target)) flushInput(target);
+}
+
+function modifierComboKey(event: KeyboardEvent) {
+  if (!event.ctrlKey && !event.metaKey && !event.altKey) return null;
+  const key = event.key;
+  if (["Control", "Meta", "Alt", "Shift"].includes(key)) return null;
+  const parts: string[] = [];
+  if (event.ctrlKey) parts.push("Ctrl");
+  if (event.metaKey) parts.push("Meta");
+  if (event.altKey) parts.push("Alt");
+  if (event.shiftKey) parts.push("Shift");
+  parts.push(key.length === 1 ? key.toUpperCase() : key);
+  return parts.join("+");
 }
 
 function onPaste(event: ClipboardEvent) {
@@ -205,6 +329,43 @@ function onFileChange(event: Event) {
   void record({ ...base, value: summary, valuePolicy: "runtime" });
 }
 
+function onDragStart(event: DragEvent) {
+  void record(actionFromEvent("dragstart", event));
+}
+
+function onDrop(event: DragEvent) {
+  void record(actionFromEvent("drop", event));
+}
+
+function onToggle(event: Event) {
+  const target = event.target;
+  if (!(target instanceof HTMLDetailsElement) && !(target instanceof HTMLDialogElement)) return;
+  const open = target instanceof HTMLDetailsElement ? target.open : (target as HTMLDialogElement).open;
+  void record(actionFromEvent("toggle", event, open ? "open" : "close"));
+}
+
+function recordDialog(detail: DialogInfo) {
+  if (recordingState.status !== "recording") return;
+  // Dialogs have no DOM target; use document.body as a stand-in so the
+  // selector machinery still produces something.
+  const target = document.body;
+  if (!target) return;
+  const message = detail.message ? ` "${detail.message.slice(0, 80)}"` : "";
+  const description = `Browser ${detail.kind} dialog${message}`;
+  const payload = buildAction({
+    type: "dialog",
+    target,
+    override: {
+      dialog: detail,
+      value: detail.response ?? (detail.accepted === undefined ? undefined : detail.accepted ? "accepted" : "dismissed"),
+      valueLabel: description,
+      valuePolicy: detail.kind === "prompt" ? "literal" : "none",
+      highRisk: detail.kind === "beforeunload"
+    }
+  });
+  void record(payload);
+}
+
 function recordNavigation() {
   if (location.href === lastNavigationUrl) return;
   lastNavigationUrl = location.href;
@@ -222,7 +383,9 @@ function recordNavigation() {
         candidates: [{ kind: "css", value: "html", confidence: 1 }]
       },
       valuePolicy: "none",
-      sensitive: false
+      sensitive: false,
+      viewport: viewportInfo(),
+      frameUrl: window !== window.top ? location.href : undefined
     })
   );
 }
@@ -295,15 +458,32 @@ chrome.storage.session.onChanged.addListener((changes) => {
   }
 });
 
+// MAIN-world hooks dispatch a CustomEvent we can pick up here.
+window.addEventListener("__browser_agent_recorder_event__", (event: Event) => {
+  const detail = (event as CustomEvent).detail;
+  if (!detail || typeof detail !== "object") return;
+  if (detail.type === "dialog") {
+    recordDialog(detail as DialogInfo);
+  }
+});
+
 void refreshState();
 patchHistory();
 document.addEventListener("pointerdown", onPointerDown, true);
 document.addEventListener("click", onClick, true);
+document.addEventListener("dblclick", onDoubleClick, true);
+document.addEventListener("contextmenu", onContextMenu, true);
 document.addEventListener("input", onInput, true);
 document.addEventListener("change", onChange, true);
 document.addEventListener("submit", onSubmit, true);
 document.addEventListener("keydown", onKeydown, true);
+document.addEventListener("blur", onBlur, true);
 document.addEventListener("paste", onPaste, true);
+document.addEventListener("compositionstart", onCompositionStart, true);
+document.addEventListener("compositionend", onCompositionEnd, true);
+document.addEventListener("dragstart", onDragStart, true);
+document.addEventListener("drop", onDrop, true);
+document.addEventListener("toggle", onToggle, true);
 window.addEventListener("popstate", recordNavigation);
 window.addEventListener("hashchange", recordNavigation);
 document.addEventListener("visibilitychange", () => {

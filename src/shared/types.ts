@@ -1,4 +1,18 @@
-export type ActionType = "click" | "input" | "change" | "submit" | "keydown" | "navigation" | "paste" | "upload";
+export type ActionType =
+  | "click"
+  | "rightclick"
+  | "doubleclick"
+  | "input"
+  | "change"
+  | "submit"
+  | "keydown"
+  | "navigation"
+  | "paste"
+  | "upload"
+  | "dragstart"
+  | "drop"
+  | "dialog"
+  | "toggle";
 
 export type RecordingStatus = "idle" | "recording";
 
@@ -69,6 +83,7 @@ export interface RecordedAction {
   page: PageInfo;
   target: ElementTarget;
   value?: string;
+  valueLabel?: string;
   key?: string;
   valuePolicy: ValuePolicy;
   runtimeVariable?: RuntimeVariable;
@@ -79,6 +94,9 @@ export interface RecordedAction {
   screenshotId?: string;
   createdAt: string;
   deleted?: boolean;
+  viewport?: ViewportInfo;
+  dialog?: DialogInfo;
+  frameUrl?: string;
 }
 
 export interface ScreenshotRecord {
@@ -107,6 +125,21 @@ export interface RecordingState {
   actionCount?: number;
 }
 
+export interface DialogInfo {
+  kind: "alert" | "confirm" | "prompt" | "print" | "beforeunload";
+  message?: string;
+  response?: string;
+  accepted?: boolean;
+}
+
+export interface ViewportInfo {
+  width: number;
+  height: number;
+  scrollX: number;
+  scrollY: number;
+  devicePixelRatio: number;
+}
+
 export interface ActionPayload {
   clientEventId?: string;
   clientSequence?: number;
@@ -114,11 +147,16 @@ export interface ActionPayload {
   page: PageInfo;
   target: ElementTarget;
   value?: string;
+  valueLabel?: string;
   key?: string;
   valuePolicy: ValuePolicy;
   sensitive: boolean;
   highRisk?: boolean;
   devicePixelRatio?: number;
+  viewport?: ViewportInfo;
+  dialog?: DialogInfo;
+  composedInput?: boolean;
+  frameUrl?: string;
 }
 
 export interface SessionBundle {

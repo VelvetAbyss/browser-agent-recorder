@@ -114,6 +114,43 @@ describe("exporters", () => {
     expect(code).toContain("process.env.EMAIL");
   });
 
+  it("emits Playwright pointer variants and dialog handlers", () => {
+    const richBundle: SessionBundle = {
+      ...bundle,
+      actions: [
+        {
+          ...bundle.actions[0],
+          id: "action_right",
+          stepNumber: 1,
+          type: "rightclick",
+          title: "Right-click row"
+        },
+        {
+          ...bundle.actions[0],
+          id: "action_double",
+          stepNumber: 2,
+          type: "doubleclick",
+          title: "Double-click cell"
+        },
+        {
+          ...bundle.actions[0],
+          id: "action_dialog",
+          stepNumber: 3,
+          type: "dialog",
+          title: "Respond to prompt",
+          valuePolicy: "runtime",
+          runtimeVariable: { name: "PROMPT_VALUE" },
+          dialog: { kind: "prompt", message: "What is your name?", response: "Ada", accepted: true }
+        }
+      ]
+    };
+    const code = generatePlaywright(richBundle);
+    expect(code).toContain("click({ button: 'right' })");
+    expect(code).toContain(".dblclick()");
+    expect(code).toContain("page.once('dialog'");
+    expect(code).toContain("process.env.PROMPT_VALUE");
+  });
+
   it("emits Playwright fill for paste and setInputFiles for upload", () => {
     const richBundle: SessionBundle = {
       ...bundle,

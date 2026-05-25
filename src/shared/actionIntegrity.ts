@@ -7,7 +7,8 @@ export function actionFingerprint(action: ActionPayload) {
     action.target.selector,
     action.target.xpath,
     action.key || "",
-    action.valuePolicy === "literal" ? action.value || "" : action.valuePolicy
+    action.valuePolicy === "literal" ? action.value || "" : action.valuePolicy,
+    action.dialog ? `${action.dialog.kind}|${action.dialog.message ?? ""}|${action.dialog.response ?? ""}|${action.dialog.accepted ?? ""}` : ""
   ].join("|");
 }
 

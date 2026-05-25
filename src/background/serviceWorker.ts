@@ -6,6 +6,48 @@ import type { ActionPayload, AppMessage, AppResponse, RecordedAction, RecordingS
 
 const STATE_KEY = "recordingState";
 const SCREENSHOT_MIN_INTERVAL_MS = 600;
+const PAGE_HOOKS_SCRIPT_ID = "browser-agent-page-hooks";
+
+async function registerPageHooks() {
+  try {
+    const existing = await chrome.scripting.getRegisteredContentScripts({ ids: [PAGE_HOOKS_SCRIPT_ID] });
+    if (existing.length) return;
+    await chrome.scripting.registerContentScripts([
+      {
+        id: PAGE_HOOKS_SCRIPT_ID,
+        matches: ["<all_urls>"],
+        js: ["page-hooks.js"],
+        runAt: "document_start",
+        world: "MAIN",
+        allFrames: true,
+        matchOriginAsFallback: true
+      } as chrome.scripting.RegisteredContentScript
+    ]);
+  } catch {
+    /* page-hooks may already be registered (race) or scripting disabled */
+  }
+}
+
+async function unregisterPageHooks() {
+  try {
+    await chrome.scripting.unregisterContentScripts({ ids: [PAGE_HOOKS_SCRIPT_ID] });
+  } catch {
+    /* not registered; ignore */
+  }
+}
+
+async function ensurePageHooksOnTab(tabId: number | undefined) {
+  if (tabId === undefined) return;
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      world: "MAIN",
+      files: ["page-hooks.js"]
+    });
+  } catch {
+    /* chrome:// page or restricted; ignore */
+  }
+}
 
 const actionDeduper = new RecentActionDeduper();
 let actionWriteQueue: Promise<unknown> = Promise.resolve();
@@ -60,6 +102,11 @@ async function startRecording(message: Extract<AppMessage, { type: "recording:st
   await db.sessions.add(session);
   const state: RecordingState = { status: "recording", sessionId: session.id, startedAt: timestamp, tabId: tab?.id, actionCount: 0 };
   await setState(state);
+  // MAIN-world hooks let us observe alert/confirm/prompt/print/beforeunload.
+  // Register globally so navigations don't strip them, plus inject on the
+  // active tab immediately for the current page that's already loaded.
+  await registerPageHooks();
+  await ensurePageHooksOnTab(tab?.id);
   return session;
 }
 
@@ -70,6 +117,7 @@ async function stopRecording() {
   }
   const next: RecordingState = { status: "idle" };
   await setState(next);
+  await unregisterPageHooks();
   return next;
 }
 
@@ -172,13 +220,17 @@ async function recordAction(payload: ActionPayload) {
     page: payload.page,
     target: payload.target,
     value: payload.value,
+    valueLabel: payload.valueLabel,
     key: payload.key,
     valuePolicy: payload.valuePolicy,
     sensitive: payload.sensitive,
     highRisk: Boolean(payload.highRisk),
     title: generatedTitle(payload, stepNumber),
     description: generatedDescription(payload),
-    createdAt: now()
+    createdAt: now(),
+    viewport: payload.viewport,
+    dialog: payload.dialog,
+    frameUrl: payload.frameUrl
   };
   await db.actions.add(action);
   await db.sessions.update(session.id, { actionCount: stepNumber, updatedAt: now() });
@@ -276,12 +328,21 @@ async function createExport(message: Extract<AppMessage, { type: "export:create"
   return { record: exportRecord, base64, mimeType: "application/zip" };
 }
 
-async function handleMessage(message: AppMessage): Promise<AppResponse> {
+async function handleMessage(message: AppMessage, sender: chrome.runtime.MessageSender): Promise<AppResponse> {
   try {
     if (message.type === "recording:start") return ok(await startRecording(message));
     if (message.type === "recording:stop") return ok(await stopRecording());
     if (message.type === "recording:get-state") return ok(await getState());
-    if (message.type === "action:record") return ok(await enqueueActionWrite(() => recordAction(message.payload)));
+    if (message.type === "action:record") {
+      // Tab gate: refuse events from any tab other than the recording one.
+      // sender.tab is undefined for messages from the extension UI; those
+      // can also call action:record (none today, but keep the path safe).
+      const state = await getState();
+      if (sender.tab?.id !== undefined && state.tabId !== undefined && sender.tab.id !== state.tabId) {
+        return ok(null);
+      }
+      return ok(await enqueueActionWrite(() => recordAction(message.payload)));
+    }
     if (message.type === "session:list") return ok(await listSessions());
     if (message.type === "session:get") return ok(await getSessionBundle(message.sessionId));
     if (message.type === "session:update-step") return ok(await updateStep(message));
@@ -296,7 +357,18 @@ async function handleMessage(message: AppMessage): Promise<AppResponse> {
   }
 }
 
-chrome.runtime.onMessage.addListener((message: AppMessage, _sender, sendResponse) => {
-  void handleMessage(message).then(sendResponse);
+chrome.runtime.onMessage.addListener((message: AppMessage, sender, sendResponse) => {
+  void handleMessage(message, sender).then(sendResponse);
   return true;
+});
+
+// Re-attach page hooks every time the recording tab finishes loading so
+// post-navigation pages stay instrumented. registerContentScripts already
+// covers future page loads, but executeScript on completion handles the
+// race where the initial load fires before registration completes.
+chrome.tabs.onUpdated.addListener(async (tabId, info) => {
+  if (info.status !== "complete") return;
+  const state = await getState();
+  if (state.status !== "recording" || state.tabId !== tabId) return;
+  await ensurePageHooksOnTab(tabId);
 });

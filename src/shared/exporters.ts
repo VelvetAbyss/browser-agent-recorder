@@ -386,7 +386,11 @@ export function generateTrajectoryJsonl(bundle: SessionBundle) {
         recovery_hint: action.type === "navigation"
           ? "If already on a page that satisfies this step, continue from the closest matching state."
           : "If this exact target is unavailable but the step intent is clear, adapt using page semantics and stable DOM locators.",
-        write_back_policy: "append_observations_to_learning_notes_only"
+        write_back_policy: "append_observations_to_learning_notes_only",
+        value_label: action.valueLabel,
+        viewport: action.viewport,
+        frame_url: action.frameUrl,
+        dialog: action.dialog
       })
     )
     .join("\n");
@@ -552,6 +556,37 @@ export function generatePlaywright(bundle: SessionBundle) {
       const varName = action.runtimeVariable?.name || runtimeVariableName(action.title, step).toUpperCase();
       lines.push(`  // Recorded files: ${action.value ?? "none"}`);
       lines.push(`  await ${locator}.setInputFiles((process.env.${varName} ?? '').split(',').map(p => p.trim()).filter(Boolean));`);
+    } else if (action.type === "rightclick") {
+      lines.push(`  await ${locator}.click({ button: 'right' });`);
+    } else if (action.type === "doubleclick") {
+      lines.push(`  await ${locator}.dblclick();`);
+    } else if (action.type === "dragstart") {
+      lines.push(`  // Drag source captured here; pair with the matching drop step.`);
+      lines.push(`  await ${locator}.hover();`);
+      lines.push(`  await page.mouse.down();`);
+    } else if (action.type === "drop") {
+      lines.push(`  await ${locator}.hover();`);
+      lines.push(`  await page.mouse.up();`);
+    } else if (action.type === "toggle") {
+      lines.push(`  await ${locator}.click();`);
+    } else if (action.type === "dialog") {
+      const kind = action.dialog?.kind ?? "alert";
+      if (kind === "print") {
+        lines.push(`  // Recorded: print dialog opened. Playwright cannot drive Chrome's print UI.`);
+      } else if (kind === "beforeunload") {
+        lines.push(`  // Recorded: beforeunload. Replay should expect a navigation confirmation.`);
+      } else {
+        const accept = action.dialog?.accepted !== false;
+        if (kind === "prompt") {
+          const responseExpr = action.valuePolicy === "runtime"
+            ? `process.env.${action.runtimeVariable?.name || runtimeVariableName(action.title, step).toUpperCase()} ?? ''`
+            : `'${escapeForTs(action.dialog?.response || "")}'`;
+          lines.push(`  page.once('dialog', async (dialog) => { await dialog.accept(${responseExpr}); });`);
+        } else {
+          lines.push(`  page.once('dialog', async (dialog) => { await dialog.${accept ? "accept" : "dismiss"}(); });`);
+        }
+        lines.push(`  // Recorded ${kind}${action.dialog?.message ? `: ${JSON.stringify(action.dialog.message)}` : ""}`);
+      }
     } else {
       lines.push(`  await ${locator}.click();`);
     }
@@ -620,6 +655,17 @@ function devtoolsRecorderStep(action: RecordedAction, stepNumber: number) {
     ];
   }
   if (action.type === "submit") {
+    return { type: "click", ...base };
+  }
+  if (action.type === "rightclick") {
+    return { type: "click", button: "secondary", ...base };
+  }
+  if (action.type === "doubleclick") {
+    return { type: "doubleClick", ...base };
+  }
+  if (action.type === "dialog" || action.type === "dragstart" || action.type === "drop" || action.type === "toggle") {
+    // No direct DevTools mapping; emit a click placeholder. The real type
+    // is preserved in trajectory.jsonl for agent replay.
     return { type: "click", ...base };
   }
   return { type: "click", ...base };
