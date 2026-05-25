@@ -1,13 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import "../styles/index.css";
+import "../styles.css";
 import { isOk, sendMessage } from "../shared/messages";
 import { runtimeVariableName } from "../shared/sanitize";
-import { bootstrapTheme } from "../shared/theme";
-import { ThemeSwitcher } from "../shared/ThemeSwitcher";
 import type { RecordedAction, RecordingSession, ScreenshotRecord, SessionBundle, StorageEstimate } from "../shared/types";
-
-bootstrapTheme();
 
 function formatBytes(bytes: number) {
   if (!bytes) return "0 B";
@@ -141,10 +137,13 @@ function Editor() {
       <header className="topbar">
         <div className="topbarTitle">
           <span className="kicker">Browser Agent · Library</span>
-          <h1>{bundle ? bundle.session.title : "Guide Library"}</h1>
+          <h1>
+            {bundle ? bundle.session.title : (
+              <>Guide <em>library</em>.</>
+            )}
+          </h1>
         </div>
         <div className="topbarActions">
-          <ThemeSwitcher />
           <button disabled={!bundle} onClick={() => void exportBundle("markdown")}>Export SOP</button>
           <button className="primary" disabled={!bundle} onClick={() => void exportBundle("skill-pack")}>Export Skill Pack</button>
         </div>
@@ -181,7 +180,10 @@ function Editor() {
           {error ? <p className="muted">{error}</p> : null}
           {!bundle ? (
             <div className="empty">
-              <h1>No recording selected</h1>
+              <span className="popupKicker">Empty shelf</span>
+              <h1>
+                Nothing selected <em>yet.</em>
+              </h1>
               <p className="muted">Start a recording from the popup, then return here to edit and export it.</p>
             </div>
           ) : (
