@@ -11,6 +11,8 @@ export function generatedTitle(action: ActionPayload, stepNumber: number) {
   if (action.type === "submit") return `Submit ${target}`;
   if (action.type === "keydown") return `Press ${action.key || "key"} on ${target}`;
   if (action.type === "navigation") return `Navigate to ${action.page.domain}`;
+  if (action.type === "paste") return `Paste content into ${target}`;
+  if (action.type === "upload") return `Upload file into ${target}`;
   return `Click ${target || `step ${stepNumber}`}`;
 }
 
@@ -21,5 +23,7 @@ export function generatedDescription(action: ActionPayload) {
   if (action.type === "submit") return `Submit the form from ${action.page.title || action.page.url}.`;
   if (action.type === "keydown") return `Press ${action.key || "the recorded key"} while focused on ${target}.`;
   if (action.type === "navigation") return `Open ${action.page.url}.`;
+  if (action.type === "paste") return `Paste the required content into ${target}.`;
+  if (action.type === "upload") return `Provide the file(s) for ${target}.`;
   return `Select ${target}.`;
 }

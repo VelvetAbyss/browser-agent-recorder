@@ -543,6 +543,15 @@ export function generatePlaywright(bundle: SessionBundle) {
       else lines.push(`  await ${locator}.click();`);
     } else if (action.type === "keydown") {
       lines.push(`  await ${locator}.press('${escapeForTs(action.key || "Enter")}');`);
+    } else if (action.type === "paste") {
+      const value = action.valuePolicy === "runtime"
+        ? `process.env.${action.runtimeVariable?.name || runtimeVariableName(action.title, step).toUpperCase()}`
+        : `'${escapeForTs(action.value || "")}'`;
+      lines.push(`  await ${locator}.fill(${value} ?? '');`);
+    } else if (action.type === "upload") {
+      const varName = action.runtimeVariable?.name || runtimeVariableName(action.title, step).toUpperCase();
+      lines.push(`  // Recorded files: ${action.value ?? "none"}`);
+      lines.push(`  await ${locator}.setInputFiles((process.env.${varName} ?? '').split(',').map(p => p.trim()).filter(Boolean));`);
     } else {
       lines.push(`  await ${locator}.click();`);
     }
@@ -593,11 +602,16 @@ function devtoolsRecorderStep(action: RecordedAction, stepNumber: number) {
   if (action.type === "navigation") {
     return { type: "navigate", url: action.page.url, ...base };
   }
-  if (action.type === "input" || action.type === "change") {
+  if (action.type === "input" || action.type === "change" || action.type === "paste") {
     const value = action.valuePolicy === "runtime"
       ? `{{${action.runtimeVariable?.name || runtimeVariableName(action.title, stepNumber).toUpperCase()}}}`
       : action.value ?? "";
     return { type: "change", value, ...base };
+  }
+  if (action.type === "upload") {
+    // Chrome DevTools Recorder has no first-class upload step. Emit a click on
+    // the input; the recorded filenames stay in trajectory.jsonl for replay.
+    return { type: "click", ...base };
   }
   if (action.type === "keydown") {
     return [

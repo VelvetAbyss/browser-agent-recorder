@@ -1,4 +1,4 @@
-export type ActionType = "click" | "input" | "change" | "submit" | "keydown" | "navigation";
+export type ActionType = "click" | "input" | "change" | "submit" | "keydown" | "navigation" | "paste" | "upload";
 
 export type RecordingStatus = "idle" | "recording";
 

@@ -114,6 +114,39 @@ describe("exporters", () => {
     expect(code).toContain("process.env.EMAIL");
   });
 
+  it("emits Playwright fill for paste and setInputFiles for upload", () => {
+    const richBundle: SessionBundle = {
+      ...bundle,
+      actions: [
+        {
+          ...bundle.actions[0],
+          id: "action_paste",
+          stepNumber: 1,
+          type: "paste",
+          value: "pasted text",
+          valuePolicy: "literal",
+          runtimeVariable: undefined,
+          title: "Paste content"
+        },
+        {
+          ...bundle.actions[0],
+          id: "action_upload",
+          stepNumber: 2,
+          type: "upload",
+          value: "report.pdf (1024 bytes)",
+          valuePolicy: "runtime",
+          runtimeVariable: { name: "UPLOAD_FILES" },
+          title: "Upload report"
+        }
+      ]
+    };
+    const code = generatePlaywright(richBundle);
+    expect(code).toContain(".fill('pasted text'");
+    expect(code).toContain("setInputFiles(");
+    expect(code).toContain("process.env.UPLOAD_FILES");
+    expect(code).toContain("Recorded files: report.pdf");
+  });
+
   it("generates Chrome DevTools Recorder JSON", () => {
     const parsed = JSON.parse(generateDevtoolsRecorderJson(bundle));
     expect(parsed.title).toBe("Login workflow");

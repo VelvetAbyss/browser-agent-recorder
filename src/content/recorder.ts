@@ -142,6 +142,10 @@ function onInput(event: Event) {
 }
 
 function onChange(event: Event) {
+  if (event.target instanceof HTMLInputElement && event.target.type === "file") {
+    onFileChange(event);
+    return;
+  }
   const target = meaningfulTarget(event);
   if (!target || !isFormValueControl(target)) return;
   void record(actionFromEvent("change", event));
@@ -151,10 +155,54 @@ function onSubmit(event: Event) {
   void record(actionFromEvent("submit", event));
 }
 
+function modifierComboKey(event: KeyboardEvent) {
+  if (!event.ctrlKey && !event.metaKey && !event.altKey) return null;
+  const key = event.key;
+  // Ignore bare modifier keys; only record when a real key is pressed alongside.
+  if (["Control", "Meta", "Alt", "Shift"].includes(key)) return null;
+  const parts: string[] = [];
+  if (event.ctrlKey) parts.push("Ctrl");
+  if (event.metaKey) parts.push("Meta");
+  if (event.altKey) parts.push("Alt");
+  if (event.shiftKey) parts.push("Shift");
+  parts.push(key.length === 1 ? key.toUpperCase() : key);
+  return parts.join("+");
+}
+
 function onKeydown(event: KeyboardEvent) {
+  const combo = modifierComboKey(event);
+  if (combo) {
+    void record(actionFromEvent("keydown", event, combo));
+    return;
+  }
   if (["Enter", "Tab", "Escape"].includes(event.key)) {
     void record(actionFromEvent("keydown", event, event.key));
   }
+}
+
+function onPaste(event: ClipboardEvent) {
+  const text = event.clipboardData?.getData("text/plain");
+  if (!text) return;
+  const base = actionFromEvent("paste", event);
+  if (!base) return;
+  void record({ ...base, value: base.sensitive ? undefined : text });
+}
+
+function describeFiles(files: FileList | null) {
+  if (!files || files.length === 0) return undefined;
+  return Array.from(files)
+    .map((file) => `${file.name} (${file.size} bytes)`)
+    .join(", ");
+}
+
+function onFileChange(event: Event) {
+  const target = event.target;
+  if (!(target instanceof HTMLInputElement) || target.type !== "file") return;
+  const summary = describeFiles(target.files);
+  if (!summary) return;
+  const base = actionFromEvent("upload", event);
+  if (!base) return;
+  void record({ ...base, value: summary, valuePolicy: "runtime" });
 }
 
 function recordNavigation() {
@@ -255,6 +303,7 @@ document.addEventListener("input", onInput, true);
 document.addEventListener("change", onChange, true);
 document.addEventListener("submit", onSubmit, true);
 document.addEventListener("keydown", onKeydown, true);
+document.addEventListener("paste", onPaste, true);
 window.addEventListener("popstate", recordNavigation);
 window.addEventListener("hashchange", recordNavigation);
 document.addEventListener("visibilitychange", () => {
