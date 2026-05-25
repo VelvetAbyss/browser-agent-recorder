@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import JSZip from "jszip";
 import {
   generateAgentInstructions,
+  generateDevtoolsRecorderJson,
   generateHumanGuide,
   generatePlaywright,
   generateSkillPackBase64,
+  generateStartContextJson,
   generateTaskBrief,
   generateTrajectoryJsonl,
   generateValidationsYaml
@@ -70,10 +72,25 @@ describe("exporters", () => {
   it("generates jsonl trajectory", () => {
     const lines = generateTrajectoryJsonl(bundle).split("\n");
     expect(JSON.parse(lines[0])).toMatchObject({
+      type: "start_context",
+      url: "https://example.com/login",
+      instruction: "Open this page before executing the recorded actions."
+    });
+    expect(JSON.parse(lines[1])).toMatchObject({
+      type: "recorded_action",
       step_number: 1,
       runtime_variable_name: "EMAIL",
       auth_policy: "use_existing_session_only",
       write_back_policy: "append_observations_to_learning_notes_only"
+    });
+  });
+
+  it("generates explicit start context", () => {
+    expect(JSON.parse(generateStartContextJson(bundle))).toMatchObject({
+      type: "start_context",
+      url: "https://example.com/login",
+      domain: "example.com",
+      auth_policy: "use_existing_session_only"
     });
   });
 
@@ -97,6 +114,16 @@ describe("exporters", () => {
     expect(code).toContain("process.env.EMAIL");
   });
 
+  it("generates Chrome DevTools Recorder JSON", () => {
+    const parsed = JSON.parse(generateDevtoolsRecorderJson(bundle));
+    expect(parsed.title).toBe("Login workflow");
+    expect(parsed.steps[0].type).toBe("setViewport");
+    expect(parsed.steps[1]).toMatchObject({ type: "navigate", url: "https://example.com/login" });
+    const change = parsed.steps.find((step: { type: string }) => step.type === "change");
+    expect(change.value).toBe("{{EMAIL}}");
+    expect(change.selectors[0]).toEqual(["aria/Email"]);
+  });
+
   it("generates validations yaml", () => {
     expect(generateValidationsYaml(bundle)).toContain("require_visible_target: true");
   });
@@ -106,6 +133,7 @@ describe("exporters", () => {
     const zip = await JSZip.loadAsync(base64, { base64: true });
     expect(zip.file("manifest.yaml")).toBeTruthy();
     expect(zip.file("agent-instructions.md")).toBeTruthy();
+    expect(zip.file("start-context.json")).toBeTruthy();
     expect(zip.file("task-brief.md")).toBeTruthy();
     expect(zip.file("human-guide.md")).toBeTruthy();
     expect(zip.file("learning-notes.jsonl")).toBeTruthy();
@@ -114,6 +142,8 @@ describe("exporters", () => {
     expect(zip.file("screenshots/step-001.png")).toBeTruthy();
     const manifest = await zip.file("manifest.yaml")!.async("string");
     expect(manifest).toContain("browser-agent-recorder.skill-pack.v2");
+    expect(manifest).toContain("start_url: \"https://example.com/login\"");
+    expect(manifest).toContain("start_context_file: start-context.json");
     expect(manifest).toContain("write_back_policy: additive_only");
   });
 });

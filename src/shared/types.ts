@@ -104,6 +104,7 @@ export interface RecordingState {
   sessionId?: string;
   startedAt?: string;
   tabId?: number;
+  actionCount?: number;
 }
 
 export interface ActionPayload {
@@ -117,6 +118,7 @@ export interface ActionPayload {
   valuePolicy: ValuePolicy;
   sensitive: boolean;
   highRisk?: boolean;
+  devicePixelRatio?: number;
 }
 
 export interface SessionBundle {
@@ -135,6 +137,17 @@ export type AppMessage =
   | { type: "session:update-step"; actionId: string; patch: Partial<Pick<RecordedAction, "title" | "description" | "sensitive" | "runtimeVariable" | "valuePolicy" | "highRisk">> }
   | { type: "session:delete-step"; actionId: string }
   | { type: "session:reorder-steps"; sessionId: string; actionIds: string[] }
+  | { type: "session:delete"; sessionId: string }
+  | { type: "storage:estimate" }
   | { type: "export:create"; sessionId: string; exportType: "skill-pack" | "markdown" };
+
+export interface StorageEstimate {
+  usageBytes: number;
+  quotaBytes: number;
+  sessionCount: number;
+  actionCount: number;
+  screenshotCount: number;
+  perSession: { sessionId: string; screenshotBytes: number; actionCount: number; screenshotCount: number }[];
+}
 
 export type AppResponse<T = unknown> = { ok: true; data: T } | { ok: false; error: string };

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getStableCssSelector, getXPath } from "./selector";
+import { buildElementTarget, getStableCssSelector, getXPath } from "./selector";
 
 describe("selectors", () => {
   it("prefers id selectors", () => {
@@ -13,5 +13,55 @@ describe("selectors", () => {
     document.body.innerHTML = '<button data-testid="submit">Save</button>';
     const button = document.querySelector("button")!;
     expect(getStableCssSelector(button)).toBe('[data-testid="submit"]');
+  });
+
+  it("normalizes icon-only download buttons", () => {
+    document.body.innerHTML = `
+      <button aria-label="title" class="download-button">
+        <svg class="arrow-down"><title>download</title><path /></svg>
+      </button>
+    `;
+    const path = document.querySelector("path")!;
+    const target = buildElementTarget(path);
+    expect(target.tagName).toBe("button");
+    expect(target.role).toBe("button");
+    expect(target.ariaLabel).toBe("Download");
+    expect(target.selector).toBe('button[aria-label="title"]');
+    expect(target.candidates[0]).toMatchObject({ kind: "role", value: "button:Download" });
+  });
+
+  it("falls back to ancestor chain when local selectors are not unique", () => {
+    document.body.innerHTML = `
+      <ul>
+        <li data-testid="row"><span class="value">a</span></li>
+        <li data-testid="row"><span class="value">b</span></li>
+      </ul>
+    `;
+    const spans = document.querySelectorAll("span.value");
+    const second = spans[1] as Element;
+    const selector = getStableCssSelector(second);
+    expect(document.querySelectorAll(selector).length).toBe(1);
+    expect(document.querySelector(selector)).toBe(second);
+  });
+
+  it("skips IDs that are not actually unique on the page", () => {
+    document.body.innerHTML = '<div id="dup"></div><div id="dup"></div>';
+    const second = document.querySelectorAll("#dup")[1] as Element;
+    const selector = getStableCssSelector(second);
+    expect(document.querySelectorAll(selector)).toHaveLength(1);
+  });
+
+  it("infers download labels for unlabeled icon controls", () => {
+    document.body.innerHTML = `
+      <a class="download-link">
+        <svg><title>Download report</title><path /></svg>
+      </a>
+    `;
+    const path = document.querySelector("path")!;
+    const target = buildElementTarget(path);
+    expect(target.tagName).toBe("a");
+    expect(target.role).toBe("link");
+    expect(target.ariaLabel).toBe("Download");
+    expect(target.candidates[0]).toMatchObject({ kind: "role", value: "link:Download" });
   });
 });

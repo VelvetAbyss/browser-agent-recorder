@@ -20,6 +20,34 @@ function startUrl(bundle: SessionBundle) {
   return bundle.session.startUrl || bundle.actions[0]?.page.url || "";
 }
 
+function startDomain(url: string) {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return "";
+  }
+}
+
+export function generateStartContextJson(bundle: SessionBundle) {
+  const url = startUrl(bundle);
+  const firstAction = bundle.actions[0];
+  return JSON.stringify(
+    {
+      type: "start_context",
+      instruction: "Open this page before executing the recorded actions.",
+      url,
+      domain: startDomain(url),
+      recorded_title: firstAction?.page.url === url ? firstAction.page.title : bundle.session.title,
+      session_started_at: bundle.session.startedAt,
+      auth_policy: "use_existing_session_only",
+      cookie_policy: "use_available_cookies_without_exporting",
+      credential_policy: "never_request_or_store_passwords"
+    },
+    null,
+    2
+  );
+}
+
 function runtimeVariableFor(action: RecordedAction, stepNumber: number) {
   return action.runtimeVariable?.name || runtimeVariableName(action.title, stepNumber).toUpperCase();
 }
@@ -193,6 +221,8 @@ export function generateTaskBrief(bundle: SessionBundle) {
     "",
     startUrl(bundle) || "Not recorded.",
     "",
+    "Agents must open this URL before executing Step 1. If the browser is already on an equivalent authenticated page, verify that state before skipping navigation.",
+    "",
     "## User Goal",
     "",
     bundle.session.summary || "TODO: Describe the final purpose of this workflow. If this is blank, infer the goal from the full trajectory before acting.",
@@ -281,6 +311,8 @@ export function generateAgentTask(bundle: SessionBundle) {
     "",
     startUrl(bundle) || "Not recorded.",
     "",
+    "Open this URL before executing the recorded actions. Use the existing authenticated browser context when available.",
+    "",
     "## Current Workflow",
     "",
     bundle.session.summary || "No explicit user goal was recorded. Infer it from the full trajectory before acting.",
@@ -319,9 +351,20 @@ export function generateAgentTask(bundle: SessionBundle) {
 }
 
 export function generateTrajectoryJsonl(bundle: SessionBundle) {
-  return bundle.actions
+  const startContextLine = JSON.stringify({
+    type: "start_context",
+    instruction: "Open this page before executing the recorded actions.",
+    url: startUrl(bundle),
+    domain: startDomain(startUrl(bundle)),
+    session_started_at: bundle.session.startedAt,
+    auth_policy: "use_existing_session_only",
+    cookie_policy: "use_available_cookies_without_exporting",
+    credential_policy: "never_request_or_store_passwords"
+  });
+  const actionLines = bundle.actions
     .map((action, index) =>
       JSON.stringify({
+        type: "recorded_action",
         step_number: index + 1,
         recorded_client_sequence: action.clientSequence,
         recorded_client_event_id: action.clientEventId,
@@ -347,6 +390,7 @@ export function generateTrajectoryJsonl(bundle: SessionBundle) {
       })
     )
     .join("\n");
+  return [startContextLine, actionLines].filter(Boolean).join("\n");
 }
 
 export function generateSelectorsJson(bundle: SessionBundle) {
@@ -508,6 +552,78 @@ export function generatePlaywright(bundle: SessionBundle) {
   return lines.join("\n");
 }
 
+// Chrome DevTools Recorder JSON — schema documented at
+// https://developer.chrome.com/docs/devtools/recorder/reference
+// Each step's `selectors` is an array of alternative locators; each alternative
+// is an array of part strings (frames). We emit a single-frame alternative per
+// candidate, in DevTools' priority order: aria → text → CSS → xpath.
+function devtoolsRecorderSelectors(action: RecordedAction): string[][] {
+  const selectors: string[][] = [];
+  const seen = new Set<string>();
+  const push = (value: string) => {
+    if (!value || seen.has(value)) return;
+    seen.add(value);
+    selectors.push([value]);
+  };
+  for (const candidate of action.target.candidates) {
+    if (candidate.kind === "role" || candidate.kind === "label" || candidate.kind === "placeholder") {
+      const name = candidate.value.includes(":") ? candidate.value.split(":").slice(1).join(":") : candidate.value;
+      if (name) push(`aria/${name}`);
+    } else if (candidate.kind === "text" && action.target.text) {
+      push(`text/${action.target.text}`);
+    } else if (candidate.kind === "css") {
+      push(candidate.value);
+    } else if (candidate.kind === "xpath") {
+      push(`xpath/${candidate.value.replace(/^\/\//, "//")}`);
+    }
+  }
+  if (selectors.length === 0) push(action.target.selector);
+  return selectors;
+}
+
+function devtoolsRecorderStep(action: RecordedAction, stepNumber: number) {
+  const selectors = devtoolsRecorderSelectors(action);
+  const base = {
+    selectors,
+    target: "main",
+    assertedEvents: action.type === "navigation"
+      ? [{ type: "navigation", url: action.page.url, title: action.page.title }]
+      : undefined
+  };
+  if (action.type === "navigation") {
+    return { type: "navigate", url: action.page.url, ...base };
+  }
+  if (action.type === "input" || action.type === "change") {
+    const value = action.valuePolicy === "runtime"
+      ? `{{${action.runtimeVariable?.name || runtimeVariableName(action.title, stepNumber).toUpperCase()}}}`
+      : action.value ?? "";
+    return { type: "change", value, ...base };
+  }
+  if (action.type === "keydown") {
+    return [
+      { type: "keyDown", key: action.key || "Enter", ...base },
+      { type: "keyUp", key: action.key || "Enter", ...base }
+    ];
+  }
+  if (action.type === "submit") {
+    return { type: "click", ...base };
+  }
+  return { type: "click", ...base };
+}
+
+export function generateDevtoolsRecorderJson(bundle: SessionBundle) {
+  const steps: unknown[] = [];
+  const start = startUrl(bundle);
+  if (start) steps.push({ type: "setViewport", width: 1280, height: 800, deviceScaleFactor: 1, isMobile: false, hasTouch: false, isLandscape: true });
+  if (start) steps.push({ type: "navigate", url: start, assertedEvents: [{ type: "navigation", url: start }] });
+  bundle.actions.forEach((action, index) => {
+    const step = devtoolsRecorderStep(action, index + 1);
+    if (Array.isArray(step)) steps.push(...step);
+    else steps.push(step);
+  });
+  return JSON.stringify({ title: bundle.session.title, steps }, null, 2);
+}
+
 function dataUrlBase64(dataUrl: string) {
   return dataUrl.split(",")[1] || "";
 }
@@ -522,6 +638,8 @@ function createSkillPackZip(bundle: SessionBundle) {
       `format: ${SKILL_PACK_FORMAT}`,
       `created_at: ${yamlString(new Date().toISOString())}`,
       `source_url: ${yamlString(startUrl(bundle))}`,
+      `start_url: ${yamlString(startUrl(bundle))}`,
+      "start_context_file: start-context.json",
       "auth:",
       "  mode: existing_browser_session",
       "  cookie_policy: use_available_cookies_without_exporting",
@@ -542,6 +660,7 @@ function createSkillPackZip(bundle: SessionBundle) {
     ].join("\n")
   );
   zip.file("agent-instructions.md", generateAgentInstructions());
+  zip.file("start-context.json", generateStartContextJson(bundle));
   zip.file("task-brief.md", generateTaskBrief(bundle));
   zip.file("human-guide.md", generateHumanGuide(bundle));
   zip.file("agent-task.md", generateAgentTask(bundle));
@@ -550,6 +669,7 @@ function createSkillPackZip(bundle: SessionBundle) {
   zip.file("learning-notes.schema.json", generateLearningNotesSchema());
   zip.file("workflow-memory.md", generateWorkflowMemory(bundle));
   zip.file("replay.playwright.ts", generatePlaywright(bundle));
+  zip.file("replay.devtools.json", generateDevtoolsRecorderJson(bundle));
   zip.file("selectors/browser-selectors.json", generateSelectorsJson(bundle));
   zip.file("validations.yaml", generateValidationsYaml(bundle));
 

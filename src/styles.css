@@ -144,14 +144,33 @@ textarea {
   margin-top: 12px;
 }
 
+.sessionRow {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px;
+}
+
+.sessionRow.active .sessionButton {
+  border-color: #3A3733;
+}
+
 .sessionButton {
   text-align: left;
   display: grid;
   gap: 4px;
 }
 
-.sessionButton.active {
-  border-color: #3A3733;
+button.small {
+  min-height: 28px;
+  padding: 4px 9px;
+  font-size: 13px;
+}
+
+.storageInfo {
+  margin-top: 14px;
+  font-size: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(58, 55, 51, 0.12);
 }
 
 .content {

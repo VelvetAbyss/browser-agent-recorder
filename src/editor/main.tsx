@@ -3,7 +3,19 @@ import { createRoot } from "react-dom/client";
 import "../styles.css";
 import { isOk, sendMessage } from "../shared/messages";
 import { runtimeVariableName } from "../shared/sanitize";
-import type { RecordedAction, RecordingSession, ScreenshotRecord, SessionBundle } from "../shared/types";
+import type { RecordedAction, RecordingSession, ScreenshotRecord, SessionBundle, StorageEstimate } from "../shared/types";
+
+function formatBytes(bytes: number) {
+  if (!bytes) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value.toFixed(value >= 10 || unit === 0 ? 0 : 1)} ${units[unit]}`;
+}
 
 type ExportResponse = {
   record: { filename: string };
@@ -37,6 +49,12 @@ function Editor() {
   const [selectedId, setSelectedId] = useState<string | undefined>(initialSession);
   const [bundle, setBundle] = useState<SessionBundle | null>(null);
   const [error, setError] = useState("");
+  const [storage, setStorage] = useState<StorageEstimate | null>(null);
+
+  async function loadStorage() {
+    const response = await sendMessage<StorageEstimate>({ type: "storage:estimate" });
+    if (isOk(response)) setStorage(response.data);
+  }
 
   const screenshots = useMemo(() => new Map((bundle?.screenshots || []).map((shot) => [shot.actionId, shot])), [bundle]);
 
@@ -56,6 +74,7 @@ function Editor() {
 
   useEffect(() => {
     void loadSessions();
+    void loadStorage();
   }, []);
 
   useEffect(() => {
@@ -82,6 +101,21 @@ function Editor() {
     [ids[index], ids[target]] = [ids[target], ids[index]];
     const response = await sendMessage<SessionBundle>({ type: "session:reorder-steps", sessionId: bundle.session.id, actionIds: ids });
     if (isOk(response)) setBundle(response.data);
+  }
+
+  async function deleteSessionAt(sessionId: string) {
+    if (!confirm("Delete this recording and all of its steps and screenshots?")) return;
+    const response = await sendMessage({ type: "session:delete", sessionId });
+    if (!response.ok) {
+      setError(response.error);
+      return;
+    }
+    if (selectedId === sessionId) {
+      setSelectedId(undefined);
+      setBundle(null);
+    }
+    await loadSessions();
+    await loadStorage();
   }
 
   async function exportBundle(exportType: "skill-pack" | "markdown") {
@@ -114,13 +148,29 @@ function Editor() {
         <aside className="sidebar">
           <strong>Recordings</strong>
           <div className="sessionList">
-            {sessions.map((session) => (
-              <button key={session.id} className={`sessionButton ${session.id === selectedId ? "active" : ""}`} onClick={() => setSelectedId(session.id)}>
-                <span>{session.title}</span>
-                <span className="muted">{session.actionCount} steps</span>
-              </button>
-            ))}
+            {sessions.map((session) => {
+              const perSession = storage?.perSession.find((entry) => entry.sessionId === session.id);
+              return (
+                <div key={session.id} className={`sessionRow ${session.id === selectedId ? "active" : ""}`}>
+                  <button className="sessionButton" onClick={() => setSelectedId(session.id)}>
+                    <span>{session.title}</span>
+                    <span className="muted">
+                      {session.actionCount} steps{perSession ? ` · ${formatBytes(perSession.screenshotBytes)}` : ""}
+                    </span>
+                  </button>
+                  <button className="danger small" title="Delete recording" onClick={() => void deleteSessionAt(session.id)}>
+                    ×
+                  </button>
+                </div>
+              );
+            })}
           </div>
+          {storage ? (
+            <div className="storageInfo muted">
+              {storage.sessionCount} recordings · {formatBytes(storage.usageBytes)}
+              {storage.quotaBytes ? ` / ${formatBytes(storage.quotaBytes)}` : ""}
+            </div>
+          ) : null}
         </aside>
         <section className="content">
           {error ? <p className="muted">{error}</p> : null}

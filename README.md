@@ -17,6 +17,7 @@ Skill Pack ZIP exports include:
 
 - `manifest.yaml`
 - `agent-instructions.md`
+- `start-context.json`
 - `task-brief.md`
 - `human-guide.md`
 - `agent-task.md`
@@ -25,6 +26,7 @@ Skill Pack ZIP exports include:
 - `learning-notes.schema.json`
 - `workflow-memory.md`
 - `replay.playwright.ts`
+- `replay.devtools.json` (Chrome DevTools Recorder format, importable into the DevTools Recorder panel)
 - `selectors/browser-selectors.json`
 - `validations.yaml`
 - `screenshots/step-001.png`, etc.

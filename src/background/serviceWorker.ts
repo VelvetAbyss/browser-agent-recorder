@@ -2,11 +2,15 @@ import { db, getSessionBundle } from "../shared/db";
 import { RecentActionDeduper } from "../shared/actionIntegrity";
 import { generateHumanGuide, generateSkillPackBase64 } from "../shared/exporters";
 import { generatedDescription, generatedTitle } from "../shared/stepText";
-import type { ActionPayload, AppMessage, AppResponse, RecordedAction, RecordingSession, RecordingState } from "../shared/types";
+import type { ActionPayload, AppMessage, AppResponse, RecordedAction, RecordingSession, RecordingState, StorageEstimate } from "../shared/types";
 
-let recordingState: RecordingState = { status: "idle" };
+const STATE_KEY = "recordingState";
+const SCREENSHOT_MIN_INTERVAL_MS = 600;
+
 const actionDeduper = new RecentActionDeduper();
 let actionWriteQueue: Promise<unknown> = Promise.resolve();
+let screenshotQueue: Promise<unknown> = Promise.resolve();
+let lastScreenshotAt = 0;
 
 function now() {
   return new Date().toISOString();
@@ -24,14 +28,18 @@ function fail(error: unknown): AppResponse<never> {
   return { ok: false, error: error instanceof Error ? error.message : String(error) };
 }
 
+async function getState(): Promise<RecordingState> {
+  const stored = await chrome.storage.session.get(STATE_KEY);
+  return (stored[STATE_KEY] as RecordingState) ?? { status: "idle" };
+}
+
+async function setState(state: RecordingState) {
+  await chrome.storage.session.set({ [STATE_KEY]: state });
+}
+
 async function currentTab() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   return tab;
-}
-
-async function broadcastState() {
-  const tabs = await chrome.tabs.query({});
-  await Promise.allSettled(tabs.filter((tab) => tab.id).map((tab) => chrome.tabs.sendMessage(tab.id!, { type: "recording:state-changed", state: recordingState })));
 }
 
 async function startRecording(message: Extract<AppMessage, { type: "recording:start" }>) {
@@ -50,18 +58,19 @@ async function startRecording(message: Extract<AppMessage, { type: "recording:st
     actionCount: 0
   };
   await db.sessions.add(session);
-  recordingState = { status: "recording", sessionId: session.id, startedAt: timestamp, tabId: tab?.id };
-  await broadcastState();
+  const state: RecordingState = { status: "recording", sessionId: session.id, startedAt: timestamp, tabId: tab?.id, actionCount: 0 };
+  await setState(state);
   return session;
 }
 
 async function stopRecording() {
-  if (recordingState.sessionId) {
-    await db.sessions.update(recordingState.sessionId, { status: "idle", stoppedAt: now(), updatedAt: now() });
+  const state = await getState();
+  if (state.sessionId) {
+    await db.sessions.update(state.sessionId, { status: "idle", stoppedAt: now(), updatedAt: now() });
   }
-  recordingState = { status: "idle" };
-  await broadcastState();
-  return recordingState;
+  const next: RecordingState = { status: "idle" };
+  await setState(next);
+  return next;
 }
 
 function enqueueActionWrite<T>(operation: () => Promise<T>) {
@@ -70,34 +79,86 @@ function enqueueActionWrite<T>(operation: () => Promise<T>) {
   return next;
 }
 
-async function captureVisibleScreenshot(actionId: string, sessionId: string, stepNumber: number) {
+function captureWindow(windowId: number | undefined): Promise<string> {
+  return windowId === undefined
+    ? chrome.tabs.captureVisibleTab({ format: "png" })
+    : chrome.tabs.captureVisibleTab(windowId, { format: "png" });
+}
+
+function scheduleScreenshot(windowId: number | undefined): Promise<string | undefined> {
+  const task: Promise<string | undefined> = screenshotQueue.then(async () => {
+    const elapsed = Date.now() - lastScreenshotAt;
+    const waitFor = Math.max(0, SCREENSHOT_MIN_INTERVAL_MS - elapsed);
+    if (waitFor > 0) await new Promise((resolve) => setTimeout(resolve, waitFor));
+    try {
+      const dataUrl = await captureWindow(windowId);
+      lastScreenshotAt = Date.now();
+      return dataUrl;
+    } catch {
+      lastScreenshotAt = Date.now();
+      return undefined;
+    }
+  });
+  screenshotQueue = task.catch(() => undefined);
+  return task;
+}
+
+async function redactScreenshot(dataUrl: string, payload: ActionPayload): Promise<string> {
+  if (!payload.sensitive || !payload.target.boundingBox) return dataUrl;
   try {
-    const tab = recordingState.tabId ? await chrome.tabs.get(recordingState.tabId) : await currentTab();
-    const dataUrl = await chrome.tabs.captureVisibleTab(tab?.windowId, { format: "png" });
-    const screenshot = {
-      id: id("shot"),
-      sessionId,
-      actionId,
-      stepNumber,
-      dataUrl,
-      path: `screenshots/step-${String(stepNumber).padStart(3, "0")}.png`,
-      createdAt: now()
-    };
-    await db.screenshots.add(screenshot);
-    return screenshot.id;
+    const blob = await (await fetch(dataUrl)).blob();
+    const bitmap = await createImageBitmap(blob);
+    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return dataUrl;
+    ctx.drawImage(bitmap, 0, 0);
+    const dpr = payload.devicePixelRatio || 1;
+    const { x, y, width, height } = payload.target.boundingBox;
+    const padding = 4;
+    ctx.fillStyle = "#000";
+    ctx.fillRect(
+      Math.max(0, x * dpr - padding),
+      Math.max(0, y * dpr - padding),
+      Math.max(0, width * dpr + padding * 2),
+      Math.max(0, height * dpr + padding * 2)
+    );
+    const out = await canvas.convertToBlob({ type: "image/png" });
+    const buffer = new Uint8Array(await out.arrayBuffer());
+    let binary = "";
+    for (let i = 0; i < buffer.length; i += 1) binary += String.fromCharCode(buffer[i]);
+    return `data:image/png;base64,${btoa(binary)}`;
   } catch {
-    return undefined;
+    return dataUrl;
   }
 }
 
+async function persistScreenshot(dataUrl: string | undefined, actionId: string, sessionId: string, stepNumber: number) {
+  if (!dataUrl) return undefined;
+  const screenshot = {
+    id: id("shot"),
+    sessionId,
+    actionId,
+    stepNumber,
+    dataUrl,
+    path: `screenshots/step-${String(stepNumber).padStart(3, "0")}.png`,
+    createdAt: now()
+  };
+  await db.screenshots.add(screenshot);
+  return screenshot.id;
+}
+
 async function recordAction(payload: ActionPayload) {
-  if (recordingState.status !== "recording" || !recordingState.sessionId) {
-    return null;
-  }
-  if (!actionDeduper.shouldAccept(payload)) {
-    return null;
-  }
-  const session = await db.sessions.get(recordingState.sessionId);
+  const state = await getState();
+  if (state.status !== "recording" || !state.sessionId) return null;
+  if (!actionDeduper.shouldAccept(payload)) return null;
+
+  // Start screenshot immediately — it races the page's reaction to the click
+  // (e.g. navigation). Even when the page begins to navigate, the visible-tab
+  // capture API resolves with the frame Chrome can still snapshot.
+  const tab = state.tabId ? await chrome.tabs.get(state.tabId).catch(() => undefined) : await currentTab();
+  const screenshotPromise = scheduleScreenshot(tab?.windowId);
+
+  const session = await db.sessions.get(state.sessionId);
   if (!session) throw new Error("No active session");
   const stepNumber = session.actionCount + 1;
   const actionId = id("action");
@@ -120,9 +181,12 @@ async function recordAction(payload: ActionPayload) {
     createdAt: now()
   };
   await db.actions.add(action);
-  const screenshotId = await captureVisibleScreenshot(actionId, session.id, stepNumber);
-  if (screenshotId) await db.actions.update(actionId, { screenshotId });
   await db.sessions.update(session.id, { actionCount: stepNumber, updatedAt: now() });
+  await setState({ ...state, actionCount: stepNumber });
+  const rawDataUrl = await screenshotPromise;
+  const dataUrl = rawDataUrl ? await redactScreenshot(rawDataUrl, payload) : undefined;
+  const screenshotId = await persistScreenshot(dataUrl, actionId, session.id, stepNumber);
+  if (screenshotId) await db.actions.update(actionId, { screenshotId });
   return { ...action, screenshotId };
 }
 
@@ -147,10 +211,52 @@ async function deleteStep(actionId: string) {
 
 async function reorderSteps(sessionId: string, actionIds: string[]) {
   await db.transaction("rw", db.actions, db.sessions, async () => {
-    await Promise.all(actionIds.map((actionId, index) => db.actions.update(actionId, { stepNumber: index + 1 })));
+    for (let index = 0; index < actionIds.length; index += 1) {
+      await db.actions.update(actionIds[index], { stepNumber: index + 1 });
+    }
     await db.sessions.update(sessionId, { updatedAt: now() });
   });
   return getSessionBundle(sessionId);
+}
+
+async function deleteSession(sessionId: string) {
+  await db.transaction("rw", db.sessions, db.actions, db.screenshots, db.exports, async () => {
+    await db.actions.where("sessionId").equals(sessionId).delete();
+    await db.screenshots.where("sessionId").equals(sessionId).delete();
+    await db.exports.where("sessionId").equals(sessionId).delete();
+    await db.sessions.delete(sessionId);
+  });
+  const state = await getState();
+  if (state.sessionId === sessionId) await setState({ status: "idle" });
+  return sessionId;
+}
+
+async function storageEstimate(): Promise<StorageEstimate> {
+  const estimate = await navigator.storage.estimate().catch(() => ({ usage: 0, quota: 0 }));
+  const sessions = await db.sessions.toArray();
+  const actions = await db.actions.toArray();
+  const screenshots = await db.screenshots.toArray();
+  const bySession = new Map<string, { screenshotBytes: number; actionCount: number; screenshotCount: number }>();
+  for (const session of sessions) bySession.set(session.id, { screenshotBytes: 0, actionCount: 0, screenshotCount: 0 });
+  for (const action of actions) {
+    const entry = bySession.get(action.sessionId);
+    if (entry) entry.actionCount += 1;
+  }
+  for (const shot of screenshots) {
+    const entry = bySession.get(shot.sessionId);
+    if (!entry) continue;
+    entry.screenshotCount += 1;
+    // base64 → bytes ≈ length * 0.75
+    entry.screenshotBytes += Math.round((shot.dataUrl.length - (shot.dataUrl.indexOf(",") + 1)) * 0.75);
+  }
+  return {
+    usageBytes: estimate.usage ?? 0,
+    quotaBytes: estimate.quota ?? 0,
+    sessionCount: sessions.length,
+    actionCount: actions.length,
+    screenshotCount: screenshots.length,
+    perSession: Array.from(bySession.entries()).map(([sessionId, entry]) => ({ sessionId, ...entry }))
+  };
 }
 
 async function createExport(message: Extract<AppMessage, { type: "export:create" }>) {
@@ -174,13 +280,15 @@ async function handleMessage(message: AppMessage): Promise<AppResponse> {
   try {
     if (message.type === "recording:start") return ok(await startRecording(message));
     if (message.type === "recording:stop") return ok(await stopRecording());
-    if (message.type === "recording:get-state") return ok(recordingState);
+    if (message.type === "recording:get-state") return ok(await getState());
     if (message.type === "action:record") return ok(await enqueueActionWrite(() => recordAction(message.payload)));
     if (message.type === "session:list") return ok(await listSessions());
     if (message.type === "session:get") return ok(await getSessionBundle(message.sessionId));
     if (message.type === "session:update-step") return ok(await updateStep(message));
     if (message.type === "session:delete-step") return ok(await deleteStep(message.actionId));
     if (message.type === "session:reorder-steps") return ok(await reorderSteps(message.sessionId, message.actionIds));
+    if (message.type === "session:delete") return ok(await deleteSession(message.sessionId));
+    if (message.type === "storage:estimate") return ok(await storageEstimate());
     if (message.type === "export:create") return ok(await createExport(message));
     return fail("Unknown message");
   } catch (error) {
