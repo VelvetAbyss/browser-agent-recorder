@@ -1,0 +1,167 @@
+/* ===== Theme: Operator ============================================
+   Deep terminal console. IBM Plex Mono throughout. Amber accents.
+   Subtle scanlines, ASCII flourishes, monospace tabular numerics.
+=================================================================== */
+
+:root[data-theme="operator"] {
+  --bg: #0c0d0e;
+  --bg-elevated: #131517;
+  --fg: #e6e1d2;
+  --muted: rgba(230, 225, 210, 0.55);
+  --accent: #ffb347;
+  --accent-soft: rgba(255, 179, 71, 0.14);
+  --danger: #ff6363;
+  --border: rgba(230, 225, 210, 0.10);
+  --border-strong: rgba(230, 225, 210, 0.26);
+  --radius: 2px;
+  --radius-sm: 2px;
+  --font-display: "Space Mono", ui-monospace, monospace;
+  --font-body: "IBM Plex Mono", ui-monospace, monospace;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+  --letter-spacing-display: -0.01em;
+  --letter-spacing-body: 0.005em;
+  --text-transform-label: uppercase;
+  --button-letter-spacing: 0.08em;
+  --button-weight: 500;
+  --input-bg: #0a0b0c;
+}
+
+[data-theme="operator"] body {
+  background-color: var(--bg);
+  background-image:
+    repeating-linear-gradient(
+      0deg,
+      rgba(255, 255, 255, 0.012) 0px,
+      rgba(255, 255, 255, 0.012) 1px,
+      transparent 1px,
+      transparent 3px
+    ),
+    radial-gradient(circle at 20% 0%, rgba(255, 179, 71, 0.08), transparent 60%),
+    radial-gradient(circle at 80% 100%, rgba(255, 99, 99, 0.05), transparent 55%);
+}
+
+[data-theme="operator"] .popup {
+  width: 360px;
+}
+
+[data-theme="operator"] .popup h1::before,
+[data-theme="operator"] .topbarTitle h1::before {
+  content: "▌ ";
+  color: var(--accent);
+  animation: cursor-blink 1.2s steps(2, end) infinite;
+}
+
+@keyframes cursor-blink {
+  50% { opacity: 0; }
+}
+
+[data-theme="operator"] .popupKicker,
+[data-theme="operator"] .topbarTitle .kicker {
+  color: var(--accent);
+}
+
+[data-theme="operator"] .popupKicker::before,
+[data-theme="operator"] .topbarTitle .kicker::before {
+  content: "// ";
+  opacity: 0.5;
+}
+
+[data-theme="operator"] button {
+  text-transform: uppercase;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+}
+
+[data-theme="operator"] button.primary {
+  background: var(--accent);
+  color: #181410;
+  text-shadow: none;
+}
+
+[data-theme="operator"] button.primary::before {
+  content: "● ";
+}
+
+[data-theme="operator"] .status {
+  background: linear-gradient(180deg, #121416, #0e1012);
+  border-left: 2px solid var(--accent);
+}
+
+[data-theme="operator"] .status .label::before {
+  content: "STATUS:";
+  margin-right: 8px;
+  opacity: 0.55;
+}
+
+[data-theme="operator"] .topbar {
+  background: linear-gradient(180deg, rgba(12, 13, 14, 0.96), rgba(12, 13, 14, 0.86));
+}
+
+[data-theme="operator"] .topbar::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--accent) 40%, var(--accent) 60%, transparent);
+  opacity: 0.5;
+}
+
+[data-theme="operator"] .sidebar > strong::before {
+  content: "▶ ";
+  color: var(--accent);
+}
+
+[data-theme="operator"] .sessionButton > span:first-child {
+  font-weight: 500;
+}
+
+[data-theme="operator"] .sessionRow.active {
+  border-left: 2px solid var(--accent);
+  background: var(--accent-soft);
+}
+
+[data-theme="operator"] .step {
+  position: relative;
+  background: linear-gradient(180deg, #131517, #101214);
+}
+
+[data-theme="operator"] .step::before {
+  content: counter(step, decimal-leading-zero);
+  counter-increment: step;
+  position: absolute;
+  top: -10px;
+  left: 14px;
+  padding: 2px 8px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.18em;
+  color: var(--accent);
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+}
+
+[data-theme="operator"] .steps {
+  counter-reset: step;
+}
+
+[data-theme="operator"] .stepFields > .muted:first-child {
+  color: var(--accent);
+  opacity: 0.85;
+}
+
+[data-theme="operator"] .meta::before {
+  content: "$ ";
+  color: var(--accent);
+  opacity: 0.7;
+}
+
+[data-theme="operator"] input,
+[data-theme="operator"] textarea {
+  font-family: var(--font-mono);
+}
+
+[data-theme="operator"] .themeChip.is-active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  box-shadow: inset 0 -1px 0 var(--accent);
+}

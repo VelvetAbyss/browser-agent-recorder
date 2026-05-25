@@ -1,9 +1,13 @@
-import React, { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import "../styles.css";
+import "../styles/index.css";
 import { isOk, sendMessage } from "../shared/messages";
 import { runtimeVariableName } from "../shared/sanitize";
+import { bootstrapTheme } from "../shared/theme";
+import { ThemeSwitcher } from "../shared/ThemeSwitcher";
 import type { RecordedAction, RecordingSession, ScreenshotRecord, SessionBundle, StorageEstimate } from "../shared/types";
+
+bootstrapTheme();
 
 function formatBytes(bytes: number) {
   if (!bytes) return "0 B";
@@ -135,11 +139,12 @@ function Editor() {
   return (
     <main className="app">
       <header className="topbar">
-        <div>
-          <h1>Guide Library</h1>
-          <div className="muted">{bundle ? bundle.session.title : "Local recordings"}</div>
+        <div className="topbarTitle">
+          <span className="kicker">Browser Agent · Library</span>
+          <h1>{bundle ? bundle.session.title : "Guide Library"}</h1>
         </div>
         <div className="topbarActions">
+          <ThemeSwitcher />
           <button disabled={!bundle} onClick={() => void exportBundle("markdown")}>Export SOP</button>
           <button className="primary" disabled={!bundle} onClick={() => void exportBundle("skill-pack")}>Export Skill Pack</button>
         </div>
