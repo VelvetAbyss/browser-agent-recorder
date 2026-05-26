@@ -290,12 +290,27 @@ async function recordAction(payload: ActionPayload) {
   };
   await db.actions.add(action);
   await db.sessions.update(session.id, { actionCount: stepNumber, updatedAt: now() });
-  await setState({ ...state, actionCount: stepNumber });
+  // Re-read state before writing back so concurrent updates (e.g. tabs.onCreated
+  // appending a new tabId) aren't clobbered by a stale spread.
+  const latestState = await getState();
+  await setState({ ...latestState, actionCount: stepNumber });
+  // Push the new count to every recorded tab directly. chrome.storage.onChanged
+  // delivery is batched and can drop intermediate values, leaving the overlay
+  // visibly behind. A direct tabs.sendMessage to the top frame is reliable.
+  void broadcastStepCount(latestState.tabIds ?? (state.tabId ? [state.tabId] : []), stepNumber);
   const rawDataUrl = await screenshotPromise;
   const dataUrl = rawDataUrl ? await redactScreenshot(rawDataUrl, payload) : undefined;
   const screenshotId = await persistScreenshot(dataUrl, actionId, session.id, stepNumber);
   if (screenshotId) await db.actions.update(actionId, { screenshotId });
   return { ...action, screenshotId };
+}
+
+async function broadcastStepCount(tabIds: number[], actionCount: number) {
+  await Promise.allSettled(
+    tabIds.map((tabId) =>
+      chrome.tabs.sendMessage(tabId, { type: "recording:step-added", actionCount }).catch(() => undefined)
+    )
+  );
 }
 
 async function listSessions() {

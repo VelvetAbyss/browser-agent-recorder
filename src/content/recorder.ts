@@ -509,10 +509,18 @@ if (!installFlag.__browserAgentRecorderInstalled) {
 
   chrome.storage.session.onChanged.addListener((changes) => {
     const next = changes.recordingState?.newValue as RecordingState | undefined;
-    if (next) {
+    if (!next) return;
+    if (next.status === "recording") {
+      // Never let a delayed storage event roll the local count backwards
+      // — direct tabs.sendMessage from the SW may have already pushed a
+      // higher value.
+      const localCount = recordingState.actionCount ?? 0;
+      const nextCount = next.actionCount ?? 0;
+      recordingState = { ...next, actionCount: Math.max(localCount, nextCount) };
+    } else {
       recordingState = next;
-      syncOverlay();
     }
+    syncOverlay();
   });
 
   // MAIN-world hooks dispatch a CustomEvent we can pick up here.
@@ -524,11 +532,29 @@ if (!installFlag.__browserAgentRecorderInstalled) {
     }
   });
 
-  // Lightweight ping used by the service worker to confirm injection worked.
+  // Lightweight ping used by the service worker to confirm injection worked,
+  // plus a direct step-count broadcast that bypasses storage.onChanged
+  // throttling so the overlay always reflects the real count.
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type === "recorder:ping") {
       sendResponse({ ok: true, data: { installed: true, href: location.href } });
       return true;
+    }
+    if (message?.type === "recording:step-added") {
+      const incoming = typeof message.actionCount === "number" ? message.actionCount : undefined;
+      if (incoming !== undefined) {
+        // Take the max so an out-of-order delivery never rolls the count
+        // backwards.
+        const current = recordingState.actionCount ?? 0;
+        recordingState = {
+          ...recordingState,
+          status: "recording",
+          actionCount: Math.max(current, incoming)
+        };
+        syncOverlay();
+      }
+      sendResponse({ ok: true });
+      return false;
     }
     return false;
   });
