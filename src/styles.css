@@ -414,8 +414,14 @@ textarea {
 }
 
 .topbarTitle h1 {
-  font-size: 38px;
-  line-height: 1;
+  font-size: clamp(24px, 3.4vw, 38px);
+  line-height: 1.05;
+  max-width: 24ch;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .topbarTitle h1 em {
@@ -433,7 +439,7 @@ textarea {
 
 .layout {
   display: grid;
-  grid-template-columns: minmax(260px, 320px) 1fr;
+  grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
   min-height: calc(100vh - 110px);
 }
 
@@ -474,7 +480,7 @@ textarea {
 .sessionRow {
   position: relative;
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 4px;
   border-radius: 12px;
@@ -513,7 +519,10 @@ textarea {
   gap: 4px;
   padding: 10px 12px;
   min-height: 48px;
-  justify-content: start;
+  justify-content: stretch;
+  /* Grid items need explicit min-width: 0 to allow children to truncate. */
+  min-width: 0;
+  overflow: hidden;
 }
 
 .sessionButton:hover {
@@ -528,7 +537,14 @@ textarea {
   line-height: 1.2;
   letter-spacing: -0.01em;
   color: var(--fg);
-  word-break: break-word;
+  /* Two-line clamp with ellipsis. Wrap at word boundaries first, fall back
+     to anywhere so single long tokens (URLs, hashes) still break cleanly. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  word-break: normal;
 }
 
 .sessionButton > .muted {
@@ -536,6 +552,9 @@ textarea {
   font-size: 11px;
   letter-spacing: 0.02em;
   color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .storageInfo {
@@ -561,7 +580,7 @@ textarea {
 
 .step {
   display: grid;
-  grid-template-columns: minmax(220px, 320px) 1fr;
+  grid-template-columns: minmax(220px, 320px) minmax(0, 1fr);
   gap: 24px;
   padding: 22px;
   background: var(--bg-card);
@@ -570,6 +589,8 @@ textarea {
   box-shadow: 0 1px 0 rgba(14, 45, 34, 0.03);
   animation: step-in 0.5s ease both;
   position: relative;
+  /* Prevent very wide selectors / xpaths from blowing past the card. */
+  overflow: hidden;
 }
 
 @keyframes step-in {
@@ -642,6 +663,9 @@ textarea {
   border-radius: 0;
   padding: 6px 0;
   box-shadow: none;
+  width: 100%;
+  min-width: 0;
+  text-overflow: ellipsis;
 }
 
 .stepFields input:focus {
@@ -663,6 +687,12 @@ textarea {
   gap: 2px;
   padding-top: 8px;
   border-top: 1px dashed var(--border-strong);
+  min-width: 0;
+}
+
+.meta > div {
+  overflow-wrap: anywhere;
+  word-break: break-all;
 }
 
 .flags,
