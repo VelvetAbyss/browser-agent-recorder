@@ -406,13 +406,34 @@ function patchHistory() {
 }
 
 const isTopFrame = window.top === window;
+const OVERLAY_ATTR = "data-browser-agent-recorder";
 let overlayRoot: HTMLDivElement | null = null;
 let overlayCount: HTMLSpanElement | null = null;
+let overlayObserver: MutationObserver | null = null;
 
-function ensureOverlay() {
-  if (!isTopFrame || overlayRoot || !document.body) return;
+// Always go through the DOM, never trust JS refs alone. Zombies are common
+// because (1) extension reloads kill the old content script's isolated
+// world but leave the overlay node in the page's main DOM, (2) some sites
+// move/remove nodes via MutationObserver, (3) SPAs occasionally replace
+// document.body wholesale.
+function findOverlayHosts(): HTMLElement[] {
+  return Array.from(document.querySelectorAll<HTMLElement>(`[${OVERLAY_ATTR}="overlay"]`));
+}
+
+function removeAllOverlays() {
+  for (const host of findOverlayHosts()) host.remove();
+  overlayRoot = null;
+  overlayCount = null;
+  overlayObserver?.disconnect();
+  overlayObserver = null;
+}
+
+function createOverlay() {
+  if (!isTopFrame || !document.body) return;
+  // Clear any zombies from a previous content script before adding ours.
+  removeAllOverlays();
   const host = document.createElement("div");
-  host.setAttribute("data-browser-agent-recorder", "overlay");
+  host.setAttribute(OVERLAY_ATTR, "overlay");
   host.style.cssText = "position:fixed;top:12px;right:12px;z-index:2147483647;pointer-events:none;";
   const shadow = host.attachShadow({ mode: "closed" });
   shadow.innerHTML = `
@@ -429,24 +450,50 @@ function ensureOverlay() {
   document.body.appendChild(host);
   overlayRoot = host;
   overlayCount = shadow.querySelector(".count");
-}
-
-function removeOverlay() {
-  overlayRoot?.remove();
-  overlayRoot = null;
-  overlayCount = null;
+  // Defend against site scripts that scrub unknown nodes from the body.
+  overlayObserver = new MutationObserver(() => {
+    if (recordingState.status !== "recording") return;
+    if (!overlayRoot || !overlayRoot.isConnected) {
+      // Recreate on the next animation frame to avoid fighting the site's
+      // own observer in the same tick.
+      requestAnimationFrame(() => {
+        if (recordingState.status === "recording") createOverlay();
+      });
+    }
+  });
+  overlayObserver.observe(document.body, { childList: true, subtree: false });
 }
 
 function syncOverlay() {
   if (!isTopFrame) return;
   if (recordingState.status === "recording") {
-    ensureOverlay();
+    // Refuse to trust a stale JS ref — if the node was detached, rebuild.
+    if (!overlayRoot || !overlayRoot.isConnected) {
+      createOverlay();
+    }
     if (overlayCount) {
       const n = recordingState.actionCount ?? 0;
       overlayCount.textContent = `${n} step${n === 1 ? "" : "s"}`;
     }
   } else {
-    removeOverlay();
+    removeAllOverlays();
+  }
+}
+
+// At injection time, immediately scrub any zombie overlay left over from a
+// previous content script execution (most often after an extension reload
+// during a recording session).
+if (isTopFrame) {
+  if (document.body) {
+    for (const host of findOverlayHosts()) host.remove();
+  } else {
+    document.addEventListener(
+      "DOMContentLoaded",
+      () => {
+        for (const host of findOverlayHosts()) host.remove();
+      },
+      { once: true }
+    );
   }
 }
 
@@ -506,6 +553,11 @@ if (!installFlag.__browserAgentRecorderInstalled) {
   window.addEventListener("popstate", recordNavigation);
   window.addEventListener("hashchange", recordNavigation);
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") recordNavigation();
+    if (document.visibilityState === "visible") {
+      recordNavigation();
+      // Resync overlay state — background tabs occasionally miss the
+      // storage onChanged callback during BFCache or extension reloads.
+      void refreshState();
+    }
   });
 }
