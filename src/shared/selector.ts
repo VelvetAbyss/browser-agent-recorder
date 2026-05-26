@@ -20,28 +20,76 @@ function getDirectChildText(element: Element, selector: string) {
   return cleanText(child?.textContent);
 }
 
+function ownVisibleText(element: Element) {
+  // Only the element's direct text (Text node children), not descendants.
+  // Used to decide whether an element is icon-only — descendant text from
+  // a card's whole body would otherwise drown out the signal.
+  let buffer = "";
+  for (const child of Array.from(element.childNodes)) {
+    if (child.nodeType === Node.TEXT_NODE) buffer += child.nodeValue ?? "";
+  }
+  return buffer.trim();
+}
+
 function inferIconLabel(element: Element) {
+  // Only attempt icon inference when the element actually looks like an
+  // icon-only control. We gate on (a) total text content being short
+  // enough to be a label and (b) the element's own (direct-child) text
+  // being trivial. Otherwise descendant SVGs and utility classes
+  // ("overflow-hidden", "box-shadow", "task-card--priority-high")
+  // trigger false positives like labelling an entire task card as
+  // "Close" because "x" appears in "overflow" or "box", or labelling a
+  // whole article as "Download" because it wraps a download icon.
+  const fullText = (
+    (element instanceof HTMLElement ? element.innerText : "") ||
+    element.textContent ||
+    ""
+  ).trim();
+  if (fullText.length > 24) return undefined;
+  const ownText = ownVisibleText(element);
+  if (ownText.length > 6) return undefined;
+
+  const ownClass = element.getAttribute("class") ?? "";
+  // Only consider a single direct-line icon child, not anything reached
+  // through descendant traversal.
+  const directSvg = element.querySelector(":scope > svg") || element.querySelector(":scope > * > svg");
+  const directUse =
+    directSvg?.querySelector(":scope > use") ||
+    element.querySelector(":scope > use");
+  const directSvgTitle = directSvg?.querySelector(":scope > title")?.textContent ?? undefined;
+
   const iconText = [
     element.getAttribute("title"),
+    element.getAttribute("aria-label"),
     element.getAttribute("data-icon"),
     element.getAttribute("icon"),
-    getDirectChildText(element, "title"),
-    getDirectChildText(element, "svg title"),
-    element.querySelector("use")?.getAttribute("href"),
-    element.querySelector("use")?.getAttribute("xlink:href"),
-    element.getAttribute("class"),
-    element.querySelector("svg")?.getAttribute("class")
+    getDirectChildText(element, ":scope > title"),
+    directSvgTitle,
+    directUse?.getAttribute("href"),
+    directUse?.getAttribute("xlink:href"),
+    // Skip long utility class lists; they're noise.
+    ownClass.length < 80 ? ownClass : null,
+    directSvg?.getAttribute("class")
   ]
     .filter(Boolean)
     .join(" ")
     .toLowerCase();
 
-  if (/(download|arrow[-_ ]?down|file[-_ ]?download|save_alt|cloud_download)/i.test(iconText)) {
+  if (!iconText) return undefined;
+
+  // Word-boundaried matches so bare letters in unrelated class names
+  // (overflow-hidden, box-shadow, max-width, etc.) cannot trip these.
+  if (/\b(download|arrow[-_]?down|file[-_]?download|save[-_]?alt|cloud[-_]?download)\b/.test(iconText)) {
     return "Download";
   }
-  if (/(calendar|date_range|event)/i.test(iconText)) return "Date picker";
-  if (/(close|x|dismiss)/i.test(iconText)) return "Close";
-  if (/(menu|hamburger)/i.test(iconText)) return "Menu";
+  if (/\b(calendar|date[-_]?range|datepicker|event)\b/.test(iconText)) return "Date picker";
+  if (/\b(close|dismiss|xmark|x[-_]close|close[-_]icon|icon[-_]close)\b/.test(iconText)) return "Close";
+  if (/\b(menu|hamburger|burger)\b/.test(iconText)) return "Menu";
+  if (/\b(search|magnifier|loupe|magnifying)\b/.test(iconText)) return "Search";
+  if (/\b(settings|gear|cog)\b/.test(iconText)) return "Settings";
+  if (/\b(edit|pencil|pen[-_]?icon)\b/.test(iconText)) return "Edit";
+  if (/\b(delete|trash|bin)\b/.test(iconText)) return "Delete";
+  if (/\b(plus|add|create)\b/.test(iconText)) return "Add";
   return undefined;
 }
 

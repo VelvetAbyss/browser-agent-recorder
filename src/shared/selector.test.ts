@@ -51,6 +51,34 @@ describe("selectors", () => {
     expect(document.querySelectorAll(selector)).toHaveLength(1);
   });
 
+  it("does not mislabel content-rich containers as 'Close' just because their class list contains 'x'", () => {
+    document.body.innerHTML = `
+      <div class="task-card-shell group relative overflow-hidden cursor-pointer bg-card shadow-[0_2px_6px] hover:-translate-y-[2px] rounded-md task-card--priority-high">
+        <h3>Ship the new dashboard</h3>
+        <p>Due tomorrow · assigned to Mia</p>
+      </div>
+    `;
+    const heading = document.querySelector("h3")!;
+    const target = buildElementTarget(heading);
+    expect(target.ariaLabel).toBeUndefined();
+    // text should come through and become the recognisable name.
+    expect(target.text).toContain("Ship the new dashboard");
+  });
+
+  it("does not mislabel a container that wraps a download icon as the container", () => {
+    document.body.innerHTML = `
+      <article class="card">
+        <h2>Quarterly report</h2>
+        <p>Final draft</p>
+        <button class="download-button" aria-label="Download report"><svg><title>download</title></svg></button>
+      </article>
+    `;
+    const article = document.querySelector("article")!;
+    const target = buildElementTarget(article);
+    // The article has too much text to be considered an icon — no false label.
+    expect(target.ariaLabel).toBeUndefined();
+  });
+
   it("infers download labels for unlabeled icon controls", () => {
     document.body.innerHTML = `
       <a class="download-link">
