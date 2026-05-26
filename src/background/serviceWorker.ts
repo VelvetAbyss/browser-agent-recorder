@@ -49,6 +49,36 @@ async function ensurePageHooksOnTab(tabId: number | undefined) {
   }
 }
 
+const RESTRICTED_URL_PATTERN = /^(chrome|chrome-extension|edge|about|view-source|devtools|chrome-search|chrome-untrusted):/i;
+const WEBSTORE_PATTERN = /^https?:\/\/(chromewebstore\.google\.com|chrome\.google\.com\/webstore)/i;
+
+function tabIsInjectable(tab: chrome.tabs.Tab | undefined) {
+  const url = tab?.url || tab?.pendingUrl;
+  if (!url) return true; // unknown URL — try anyway and let executeScript fail loudly
+  return !RESTRICTED_URL_PATTERN.test(url) && !WEBSTORE_PATTERN.test(url);
+}
+
+async function ensureContentScript(tabId: number): Promise<{ ok: true } | { ok: false; reason: string }> {
+  // Try a ping first — if the content script is already running we're done.
+  try {
+    const pong = await chrome.tabs.sendMessage(tabId, { type: "recorder:ping" });
+    if (pong && (pong as { ok?: boolean }).ok) return { ok: true };
+  } catch {
+    /* no listener; need to inject */
+  }
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      world: "ISOLATED",
+      files: ["assets/content.js"]
+    });
+    return { ok: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { ok: false, reason: message };
+  }
+}
+
 const actionDeduper = new RecentActionDeduper();
 let actionWriteQueue: Promise<unknown> = Promise.resolve();
 let screenshotQueue: Promise<unknown> = Promise.resolve();
@@ -86,6 +116,25 @@ async function currentTab() {
 
 async function startRecording(message: Extract<AppMessage, { type: "recording:start" }>) {
   const tab = message.tabId ? await chrome.tabs.get(message.tabId) : await currentTab();
+  if (!tab?.id) {
+    throw new Error("No active tab to record. Open a regular web page first.");
+  }
+  if (!tabIsInjectable(tab)) {
+    throw new Error(
+      "Recorder can't run on this page (chrome://, the Web Store, or another protected origin). Switch to a regular https:// page and try again."
+    );
+  }
+  // Force-inject the content script before flipping the state to recording.
+  // Manifest content_scripts only fire on future page loads, so a tab that
+  // was already open at install/update time would otherwise be a no-op and
+  // the user would see 0 captured steps. Guarded by __browserAgentRecorderInstalled
+  // so re-injection on an already-instrumented tab is a no-op.
+  const inject = await ensureContentScript(tab.id);
+  if (!inject.ok) {
+    throw new Error(
+      `Recorder failed to attach to this page (${inject.reason}). Try reloading the page and starting again.`
+    );
+  }
   const timestamp = now();
   const session: RecordingSession = {
     id: id("session"),
@@ -100,7 +149,14 @@ async function startRecording(message: Extract<AppMessage, { type: "recording:st
     actionCount: 0
   };
   await db.sessions.add(session);
-  const state: RecordingState = { status: "recording", sessionId: session.id, startedAt: timestamp, tabId: tab?.id, actionCount: 0 };
+  const state: RecordingState = {
+    status: "recording",
+    sessionId: session.id,
+    startedAt: timestamp,
+    tabId: tab.id,
+    tabIds: [tab.id],
+    actionCount: 0
+  };
   await setState(state);
   // MAIN-world hooks let us observe alert/confirm/prompt/print/beforeunload.
   // Register globally so navigations don't strip them, plus inject on the
@@ -334,12 +390,17 @@ async function handleMessage(message: AppMessage, sender: chrome.runtime.Message
     if (message.type === "recording:stop") return ok(await stopRecording());
     if (message.type === "recording:get-state") return ok(await getState());
     if (message.type === "action:record") {
-      // Tab gate: refuse events from any tab other than the recording one.
-      // sender.tab is undefined for messages from the extension UI; those
-      // can also call action:record (none today, but keep the path safe).
+      // Tab gate: refuse events from any tab that wasn't started or opened
+      // from the recording tab. Without this, a different tab's content
+      // script could leak events into the active session. sender.tab is
+      // undefined for messages from the extension UI; those can also call
+      // action:record (none today, but keep the path safe).
       const state = await getState();
-      if (sender.tab?.id !== undefined && state.tabId !== undefined && sender.tab.id !== state.tabId) {
-        return ok(null);
+      const senderTabId = sender.tab?.id;
+      if (senderTabId !== undefined && state.tabIds && state.tabIds.length > 0) {
+        if (!state.tabIds.includes(senderTabId)) {
+          return ok(null);
+        }
       }
       return ok(await enqueueActionWrite(() => recordAction(message.payload)));
     }
@@ -362,13 +423,45 @@ chrome.runtime.onMessage.addListener((message: AppMessage, sender, sendResponse)
   return true;
 });
 
-// Re-attach page hooks every time the recording tab finishes loading so
+// Re-attach page hooks every time a recording tab finishes loading so
 // post-navigation pages stay instrumented. registerContentScripts already
 // covers future page loads, but executeScript on completion handles the
 // race where the initial load fires before registration completes.
 chrome.tabs.onUpdated.addListener(async (tabId, info) => {
   if (info.status !== "complete") return;
   const state = await getState();
-  if (state.status !== "recording" || state.tabId !== tabId) return;
+  if (state.status !== "recording") return;
+  if (!state.tabIds?.includes(tabId)) return;
   await ensurePageHooksOnTab(tabId);
+  // Also re-confirm the content script is alive after navigation. Chrome
+  // tears down and re-creates the content world on cross-origin navigation;
+  // manifest scripts will re-inject, but this protects the rare race.
+  await ensureContentScript(tabId);
+});
+
+// Track child tabs opened during recording (target=_blank, middle-click,
+// window.open). They should be part of the same session so the user can
+// click through into a new tab without silently losing events.
+chrome.tabs.onCreated.addListener(async (tab) => {
+  if (!tab.id) return;
+  const state = await getState();
+  if (state.status !== "recording" || !state.tabIds) return;
+  const opener = tab.openerTabId;
+  if (opener === undefined || !state.tabIds.includes(opener)) return;
+  if (state.tabIds.includes(tab.id)) return;
+  const nextTabIds = [...state.tabIds, tab.id];
+  await setState({ ...state, tabIds: nextTabIds });
+  // Best-effort eager injection. If the new tab is still loading,
+  // executeScript will succeed once document_start fires.
+  await ensureContentScript(tab.id);
+  await ensurePageHooksOnTab(tab.id);
+});
+
+// Drop closed tabs from the gate set.
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  const state = await getState();
+  if (state.status !== "recording" || !state.tabIds) return;
+  if (!state.tabIds.includes(tabId)) return;
+  const next = state.tabIds.filter((id) => id !== tabId);
+  await setState({ ...state, tabIds: next });
 });

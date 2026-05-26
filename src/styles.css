@@ -340,6 +340,28 @@ textarea {
   justify-content: center;
 }
 
+.hint {
+  margin: 0;
+  padding: 10px 14px;
+  background: var(--accent-tint);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-input);
+  color: var(--muted-strong);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.errorBanner {
+  margin: 0;
+  padding: 10px 14px;
+  background: rgba(168, 65, 42, 0.08);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-input);
+  color: var(--danger);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
 /* ---------- Editor ---------- */
 
 .app {

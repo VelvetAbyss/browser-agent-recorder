@@ -73,7 +73,14 @@ function Popup() {
         <button onClick={() => openEditor()}>Open guide library</button>
       </div>
 
-      {error ? <p className="muted">{error}</p> : null}
+      {isRecording && stepCount === 0 ? (
+        <p className="muted hint">
+          No steps yet. Click somewhere on the page to confirm capture is working.
+          If nothing arrives, reload the page and try again.
+        </p>
+      ) : null}
+
+      {error ? <p className="errorBanner">{error}</p> : null}
     </main>
   );
 }

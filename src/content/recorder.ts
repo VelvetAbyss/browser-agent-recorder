@@ -450,42 +450,62 @@ function syncOverlay() {
   }
 }
 
-chrome.storage.session.onChanged.addListener((changes) => {
-  const next = changes.recordingState?.newValue as RecordingState | undefined;
-  if (next) {
-    recordingState = next;
-    syncOverlay();
-  }
-});
+// Idempotency: the service worker may re-inject this content script into a
+// tab that was loaded before the extension was installed/updated. Without a
+// guard we'd attach every listener twice and emit each user event twice.
+interface RecorderWindow extends Window {
+  __browserAgentRecorderInstalled?: boolean;
+}
+const installFlag = window as RecorderWindow;
+if (!installFlag.__browserAgentRecorderInstalled) {
+  installFlag.__browserAgentRecorderInstalled = true;
 
-// MAIN-world hooks dispatch a CustomEvent we can pick up here.
-window.addEventListener("__browser_agent_recorder_event__", (event: Event) => {
-  const detail = (event as CustomEvent).detail;
-  if (!detail || typeof detail !== "object") return;
-  if (detail.type === "dialog") {
-    recordDialog(detail as DialogInfo);
-  }
-});
+  chrome.storage.session.onChanged.addListener((changes) => {
+    const next = changes.recordingState?.newValue as RecordingState | undefined;
+    if (next) {
+      recordingState = next;
+      syncOverlay();
+    }
+  });
 
-void refreshState();
-patchHistory();
-document.addEventListener("pointerdown", onPointerDown, true);
-document.addEventListener("click", onClick, true);
-document.addEventListener("dblclick", onDoubleClick, true);
-document.addEventListener("contextmenu", onContextMenu, true);
-document.addEventListener("input", onInput, true);
-document.addEventListener("change", onChange, true);
-document.addEventListener("submit", onSubmit, true);
-document.addEventListener("keydown", onKeydown, true);
-document.addEventListener("blur", onBlur, true);
-document.addEventListener("paste", onPaste, true);
-document.addEventListener("compositionstart", onCompositionStart, true);
-document.addEventListener("compositionend", onCompositionEnd, true);
-document.addEventListener("dragstart", onDragStart, true);
-document.addEventListener("drop", onDrop, true);
-document.addEventListener("toggle", onToggle, true);
-window.addEventListener("popstate", recordNavigation);
-window.addEventListener("hashchange", recordNavigation);
-document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") recordNavigation();
-});
+  // MAIN-world hooks dispatch a CustomEvent we can pick up here.
+  window.addEventListener("__browser_agent_recorder_event__", (event: Event) => {
+    const detail = (event as CustomEvent).detail;
+    if (!detail || typeof detail !== "object") return;
+    if (detail.type === "dialog") {
+      recordDialog(detail as DialogInfo);
+    }
+  });
+
+  // Lightweight ping used by the service worker to confirm injection worked.
+  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (message?.type === "recorder:ping") {
+      sendResponse({ ok: true, data: { installed: true, href: location.href } });
+      return true;
+    }
+    return false;
+  });
+
+  void refreshState();
+  patchHistory();
+  document.addEventListener("pointerdown", onPointerDown, true);
+  document.addEventListener("click", onClick, true);
+  document.addEventListener("dblclick", onDoubleClick, true);
+  document.addEventListener("contextmenu", onContextMenu, true);
+  document.addEventListener("input", onInput, true);
+  document.addEventListener("change", onChange, true);
+  document.addEventListener("submit", onSubmit, true);
+  document.addEventListener("keydown", onKeydown, true);
+  document.addEventListener("blur", onBlur, true);
+  document.addEventListener("paste", onPaste, true);
+  document.addEventListener("compositionstart", onCompositionStart, true);
+  document.addEventListener("compositionend", onCompositionEnd, true);
+  document.addEventListener("dragstart", onDragStart, true);
+  document.addEventListener("drop", onDrop, true);
+  document.addEventListener("toggle", onToggle, true);
+  window.addEventListener("popstate", recordNavigation);
+  window.addEventListener("hashchange", recordNavigation);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") recordNavigation();
+  });
+}

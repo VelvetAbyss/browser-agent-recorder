@@ -122,6 +122,7 @@ export interface RecordingState {
   sessionId?: string;
   startedAt?: string;
   tabId?: number;
+  tabIds?: number[];
   actionCount?: number;
 }
 
