@@ -18,6 +18,7 @@
     "build": "tsc --noEmit && vite build && BUILD_TARGET=content vite build",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
+    "icons": "node scripts/generate-icons.mjs",
     "package": "npm run build && node scripts/package.mjs"
   },
   "dependencies": {

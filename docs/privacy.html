@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Privacy Policy — Browser Agent Recorder</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        margin: 0 auto;
+        max-width: 720px;
+        padding: 48px 24px 80px;
+        font: 16px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+        color: #18181b;
+        background: #fafafa;
+      }
+      h1 { font-size: 28px; letter-spacing: -0.02em; }
+      h2 { font-size: 19px; margin-top: 32px; letter-spacing: -0.01em; }
+      code { background: #f4f4f5; padding: 1px 5px; border-radius: 5px; font-size: 14px; }
+      table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+      th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #e4e4e7; vertical-align: top; }
+      a { color: #047857; }
+      .muted { color: #71717a; }
+      @media (prefers-color-scheme: dark) {
+        body { color: #e4e4e7; background: #0a0a0b; }
+        code { background: #27272a; }
+        th, td { border-bottom-color: #27272a; }
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Privacy Policy — Browser Agent Recorder</h1>
+    <p class="muted">Last updated: 2026-06-09</p>
+
+    <p>
+      Browser Agent Recorder ("the extension") is a local-first browser recorder.
+      This policy explains exactly what data it touches and where that data goes.
+    </p>
+
+    <h2>Summary</h2>
+    <p>
+      <strong>The extension does not transmit any data off your device.</strong>
+      There is no backend server, no account, no analytics, and no third-party
+      data sharing. All recordings stay in your browser's local storage until you
+      delete them.
+    </p>
+
+    <h2>What the extension accesses</h2>
+    <p>While you are actively recording, the extension captures, on your device only:</p>
+    <ul>
+      <li>The URLs and page titles of the pages you record on.</li>
+      <li>Information about the elements you interact with (tag, accessible name, selectors, position).</li>
+      <li>Values you type into non-sensitive form fields (so steps can be replayed).</li>
+      <li>Screenshots of the visible tab at each step.</li>
+      <li>Native browser dialog text (alert / confirm / prompt).</li>
+    </ul>
+    <p>
+      It does <strong>not</strong> access your browsing history, other tabs you are
+      not recording, bookmarks, or any page when you are not recording.
+    </p>
+
+    <h2>What is never collected</h2>
+    <ul>
+      <li><strong>Passwords are never stored.</strong> Password fields are excluded entirely.</li>
+      <li><strong>Sensitive fields are masked</strong> and their region is blacked out in the screenshot.</li>
+      <li>No data is sent to the developer or any third party. No cookies, tokens, or session values are exported.</li>
+    </ul>
+
+    <h2>Where data is stored</h2>
+    <p>
+      All recordings, steps, and screenshots are stored locally in your browser
+      using IndexedDB. They never leave your machine unless you explicitly export
+      a file and choose where to save it.
+    </p>
+
+    <h2>Your control over your data</h2>
+    <ul>
+      <li>Delete any single recording, or use <strong>Clear all data</strong> to remove everything.</li>
+      <li>Uninstalling the extension removes all of its locally stored data.</li>
+    </ul>
+
+    <h2>Permissions</h2>
+    <table>
+      <tr><th>Permission</th><th>Why it is needed</th></tr>
+      <tr><td><code>activeTab</code>, <code>&lt;all_urls&gt;</code></td><td>To observe interactions and capture screenshots on the pages you choose to record.</td></tr>
+      <tr><td><code>tabs</code></td><td>To capture the correct window and follow recording into tabs opened during a workflow.</td></tr>
+      <tr><td><code>scripting</code></td><td>To inject the recorder into the page you are recording.</td></tr>
+      <tr><td><code>storage</code></td><td>To save recordings locally and remember preferences.</td></tr>
+    </table>
+
+    <h2>Network</h2>
+    <p>
+      The extension loads web fonts from Google Fonts for its own UI styling. No
+      recording data is involved in that request. No other network requests are made.
+    </p>
+
+    <h2>Contact</h2>
+    <p>
+      Questions or requests:
+      <a href="https://github.com/VelvetAbyss/browser-agent-recorder/issues">open an issue</a>.
+    </p>
+  </body>
+</html>
