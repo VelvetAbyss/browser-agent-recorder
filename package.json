@@ -19,7 +19,8 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "icons": "node scripts/generate-icons.mjs",
-    "package": "npm run build && node scripts/package.mjs"
+    "package": "npm run build && node scripts/package.mjs",
+    "release": "node scripts/release.mjs"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^5.0.0",
