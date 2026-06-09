@@ -7,6 +7,14 @@
     "default_popup": "popup.html",
     "default_title": "Browser Agent Recorder"
   },
+  "commands": {
+    "toggle-recording": {
+      "suggested_key": {
+        "default": "Alt+Shift+R"
+      },
+      "description": "Start or stop recording"
+    }
+  },
   "background": {
     "service_worker": "assets/background.js",
     "type": "module"

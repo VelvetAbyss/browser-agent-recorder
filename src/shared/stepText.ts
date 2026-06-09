@@ -14,6 +14,8 @@ export function generatedTitle(action: ActionPayload, stepNumber: number) {
   if (action.type === "submit") return `Submit ${target}`;
   if (action.type === "keydown") return `Press ${action.key || "key"} on ${target}`;
   if (action.type === "navigation") return `Navigate to ${action.page.domain}`;
+  if (action.type === "note") return action.value?.trim() || "Manual note";
+  if (action.type === "wait") return `Wait ${action.value || "2"}s`;
   if (action.type === "paste") return `Paste content into ${target}`;
   if (action.type === "upload") return `Upload file into ${target}`;
   if (action.type === "rightclick") return `Right-click ${target}`;
@@ -42,6 +44,8 @@ export function generatedDescription(action: ActionPayload) {
   if (action.type === "submit") return `Submit the form from ${action.page.title || action.page.url}.`;
   if (action.type === "keydown") return `Press ${action.key || "the recorded key"} while focused on ${target}.`;
   if (action.type === "navigation") return `Open ${action.page.url}.`;
+  if (action.type === "note") return action.value?.trim() || "Manual note for the operator.";
+  if (action.type === "wait") return `Pause for ${action.value || "2"} seconds before continuing.`;
   if (action.type === "paste") return `Paste the required content into ${target}.`;
   if (action.type === "upload") return `Provide the file(s) for ${target}.`;
   if (action.type === "rightclick") return `Open the context menu for ${target}.`;

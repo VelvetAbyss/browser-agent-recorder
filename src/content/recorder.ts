@@ -1,5 +1,6 @@
 import { buildElementTarget } from "../shared/selector";
 import { isSensitiveField } from "../shared/sanitize";
+import { t } from "../shared/i18n";
 import type {
   ActionPayload,
   ActionType,
@@ -59,6 +60,8 @@ function meaningfulTarget(event: Event): Element | null {
   const path = typeof event.composedPath === "function" ? event.composedPath() : [];
   const node = (path.find((entry) => entry instanceof Element) as Element | undefined) || (event.target instanceof Element ? event.target : null);
   if (!node) return null;
+  // Never record interactions with our own REC overlay (e.g. dragging it).
+  if (overlayRoot && (node === overlayRoot || overlayRoot.contains(node))) return null;
   const rawTarget = node.closest("button,a,input,textarea,select,label,[role],summary,[contenteditable='true'],svg,path,use,td,th") || node;
   return interactiveAncestor(rawTarget);
 }
@@ -408,8 +411,13 @@ function patchHistory() {
 const isTopFrame = window.top === window;
 const OVERLAY_ATTR = "data-browser-agent-recorder";
 let overlayRoot: HTMLDivElement | null = null;
+let overlayBar: HTMLElement | null = null;
 let overlayCount: HTMLSpanElement | null = null;
+let overlayDot: HTMLSpanElement | null = null;
+let overlayPhaseEl: HTMLSpanElement | null = null;
 let overlayObserver: MutationObserver | null = null;
+let overlayResetTimer: number | null = null;
+let overlayPos: { left: number; top: number } | null = null;
 
 // Always go through the DOM, never trust JS refs alone. Zombies are common
 // because (1) extension reloads kill the old content script's isolated
@@ -423,9 +431,62 @@ function findOverlayHosts(): HTMLElement[] {
 function removeAllOverlays() {
   for (const host of findOverlayHosts()) host.remove();
   overlayRoot = null;
+  overlayBar = null;
   overlayCount = null;
+  overlayDot = null;
+  overlayPhaseEl = null;
   overlayObserver?.disconnect();
   overlayObserver = null;
+  if (overlayResetTimer !== null) {
+    window.clearTimeout(overlayResetTimer);
+    overlayResetTimer = null;
+  }
+}
+
+// Clamp a stored position into the current viewport and apply it (switching
+// the host from the default top-right anchor to absolute left/top).
+function applyOverlayPosition() {
+  if (!overlayRoot || !overlayPos) return;
+  const w = overlayRoot.offsetWidth || 120;
+  const h = overlayRoot.offsetHeight || 32;
+  const left = Math.max(4, Math.min(window.innerWidth - w - 4, overlayPos.left));
+  const top = Math.max(4, Math.min(window.innerHeight - h - 4, overlayPos.top));
+  overlayRoot.style.left = `${left}px`;
+  overlayRoot.style.top = `${top}px`;
+  overlayRoot.style.right = "auto";
+}
+
+function startOverlayDrag(event: PointerEvent) {
+  if (event.button !== 0 || !overlayRoot) return;
+  event.preventDefault();
+  const rect = overlayRoot.getBoundingClientRect();
+  const offsetX = event.clientX - rect.left;
+  const offsetY = event.clientY - rect.top;
+  overlayBar?.setPointerCapture(event.pointerId);
+  const move = (e: PointerEvent) => {
+    if (!overlayRoot) return;
+    const w = overlayRoot.offsetWidth;
+    const h = overlayRoot.offsetHeight;
+    const left = Math.max(4, Math.min(window.innerWidth - w - 4, e.clientX - offsetX));
+    const top = Math.max(4, Math.min(window.innerHeight - h - 4, e.clientY - offsetY));
+    overlayRoot.style.left = `${left}px`;
+    overlayRoot.style.top = `${top}px`;
+    overlayRoot.style.right = "auto";
+  };
+  const up = () => {
+    window.removeEventListener("pointermove", move, true);
+    window.removeEventListener("pointerup", up, true);
+    if (!overlayRoot) return;
+    const r = overlayRoot.getBoundingClientRect();
+    overlayPos = { left: Math.round(r.left), top: Math.round(r.top) };
+    try {
+      void chrome.storage.local.set({ overlayPos });
+    } catch {
+      /* storage unavailable; position is still applied for this session */
+    }
+  };
+  window.addEventListener("pointermove", move, true);
+  window.addEventListener("pointerup", up, true);
 }
 
 function createOverlay() {
@@ -434,22 +495,37 @@ function createOverlay() {
   removeAllOverlays();
   const host = document.createElement("div");
   host.setAttribute(OVERLAY_ATTR, "overlay");
+  // Host ignores pointer events so the page stays clickable; only the bar
+  // re-enables them so it can be grabbed and dragged.
   host.style.cssText = "position:fixed;top:12px;right:12px;z-index:2147483647;pointer-events:none;";
   const shadow = host.attachShadow({ mode: "closed" });
   shadow.innerHTML = `
     <style>
       .bar { display:flex; align-items:center; gap:8px; padding:6px 10px; border-radius:999px;
              background:rgba(15,15,15,0.85); color:#fff; font:600 12px/1 system-ui,-apple-system,sans-serif;
-             box-shadow:0 4px 12px rgba(0,0,0,0.25); }
-      .dot { width:9px; height:9px; border-radius:50%; background:#ef4444;
+             box-shadow:0 4px 12px rgba(0,0,0,0.25); white-space:nowrap;
+             pointer-events:auto; cursor:move; user-select:none; touch-action:none; }
+      .dot { width:9px; height:9px; border-radius:50%; background:#ef4444; flex:none;
              animation: bar-pulse 1.2s ease-in-out infinite; }
+      .dot.capturing { background:#f59e0b; }
+      .dot.complete { background:#22c55e; animation:none; }
+      .dot.paused { background:#a1a1aa; animation:none; }
+      .phase { opacity:0.85; }
+      .phase.complete { color:#86efac; opacity:1; }
+      .phase.capturing { color:#fcd34d; }
+      .phase.paused { color:#d4d4d8; opacity:1; }
       @keyframes bar-pulse { 0%,100% { opacity:1 } 50% { opacity:0.4 } }
     </style>
-    <div class="bar"><span class="dot"></span><span>REC</span><span class="count">0 steps</span></div>
+    <div class="bar"><span class="dot"></span><span>REC</span><span class="count"></span><span class="phase"></span></div>
   `;
   document.body.appendChild(host);
   overlayRoot = host;
+  overlayBar = shadow.querySelector(".bar");
   overlayCount = shadow.querySelector(".count");
+  overlayDot = shadow.querySelector(".dot");
+  overlayPhaseEl = shadow.querySelector(".phase");
+  overlayBar?.addEventListener("pointerdown", startOverlayDrag);
+  applyOverlayPosition();
   // Defend against site scripts that scrub unknown nodes from the body.
   overlayObserver = new MutationObserver(() => {
     if (recordingState.status !== "recording") return;
@@ -473,10 +549,50 @@ function syncOverlay() {
     }
     if (overlayCount) {
       const n = recordingState.actionCount ?? 0;
-      overlayCount.textContent = `${n} step${n === 1 ? "" : "s"}`;
+      overlayCount.textContent = t("overlay.steps", { n });
+    }
+    const paused = Boolean(recordingState.paused);
+    if (overlayDot) overlayDot.className = `dot${paused ? " paused" : ""}`;
+    if (overlayPhaseEl) {
+      overlayPhaseEl.className = `phase${paused ? " paused" : ""}`;
+      overlayPhaseEl.textContent = paused ? t("overlay.paused") : "";
     }
   } else {
     removeAllOverlays();
+  }
+}
+
+// Hide the overlay host for the duration of a screenshot capture without
+// tearing it down (so the self-healing observer doesn't fight us).
+function setOverlayHidden(hidden: boolean) {
+  if (!isTopFrame || !overlayRoot) return;
+  overlayRoot.style.visibility = hidden ? "hidden" : "visible";
+}
+
+// Drive the three-state overlay feedback. "capturing" tells the user a step is
+// being saved (wait); "complete" flashes a confirmation that the step — screenshot
+// included — is fully recorded and they can proceed; then it reverts to idle.
+function setOverlayPhase(phase: "idle" | "capturing" | "complete", n: number) {
+  if (!isTopFrame) return;
+  if (recordingState.status !== "recording") return;
+  if (!overlayRoot || !overlayRoot.isConnected) createOverlay();
+  if (overlayResetTimer !== null) {
+    window.clearTimeout(overlayResetTimer);
+    overlayResetTimer = null;
+  }
+  if (overlayCount) overlayCount.textContent = t("overlay.steps", { n });
+  if (overlayDot) overlayDot.className = `dot${phase === "idle" ? "" : ` ${phase}`}`;
+  if (overlayPhaseEl) {
+    overlayPhaseEl.className = `phase${phase === "idle" ? "" : ` ${phase}`}`;
+    if (phase === "capturing") overlayPhaseEl.textContent = t("overlay.capturing");
+    else if (phase === "complete") overlayPhaseEl.textContent = t("overlay.complete", { n });
+    else overlayPhaseEl.textContent = "";
+  }
+  if (phase === "complete") {
+    overlayResetTimer = window.setTimeout(() => {
+      overlayResetTimer = null;
+      setOverlayPhase("idle", recordingState.actionCount ?? n);
+    }, 1200);
   }
 }
 
@@ -506,6 +622,22 @@ interface RecorderWindow extends Window {
 const installFlag = window as RecorderWindow;
 if (!installFlag.__browserAgentRecorderInstalled) {
   installFlag.__browserAgentRecorderInstalled = true;
+
+  // Restore the user's preferred overlay position (O), then re-apply in case
+  // the overlay was already created before this resolved.
+  if (isTopFrame) {
+    try {
+      void chrome.storage.local.get("overlayPos").then((result) => {
+        const pos = result?.overlayPos;
+        if (pos && typeof pos.left === "number" && typeof pos.top === "number") {
+          overlayPos = pos;
+          applyOverlayPosition();
+        }
+      });
+    } catch {
+      /* storage unavailable */
+    }
+  }
 
   chrome.storage.session.onChanged.addListener((changes) => {
     const next = changes.recordingState?.newValue as RecordingState | undefined;
@@ -540,18 +672,36 @@ if (!installFlag.__browserAgentRecorderInstalled) {
       sendResponse({ ok: true, data: { installed: true, href: location.href } });
       return true;
     }
-    if (message?.type === "recording:step-added") {
+    // Direct nudge from the service worker at recording start so the overlay
+    // appears without waiting for the batched storage.onChanged event.
+    if (message?.type === "recording:sync") {
+      void refreshState();
+      sendResponse({ ok: true });
+      return false;
+    }
+    // Hide/show the REC overlay around a screenshot capture so it never appears
+    // in the stored image. Respond after a paint frame so the visibility change
+    // is composited before the service worker captures.
+    if (message?.type === "recording:overlay-visibility") {
+      setOverlayHidden(!message.visible);
+      requestAnimationFrame(() => requestAnimationFrame(() => sendResponse({ ok: true })));
+      return true; // async response
+    }
+    if (message?.type === "recording:paused-changed") {
+      recordingState = { ...recordingState, status: "recording", paused: Boolean(message.paused) };
+      syncOverlay();
+      sendResponse({ ok: true });
+      return false;
+    }
+    if (message?.type === "recording:step-capturing" || message?.type === "recording:step-complete") {
       const incoming = typeof message.actionCount === "number" ? message.actionCount : undefined;
       if (incoming !== undefined) {
         // Take the max so an out-of-order delivery never rolls the count
         // backwards.
         const current = recordingState.actionCount ?? 0;
-        recordingState = {
-          ...recordingState,
-          status: "recording",
-          actionCount: Math.max(current, incoming)
-        };
-        syncOverlay();
+        const nextCount = Math.max(current, incoming);
+        recordingState = { ...recordingState, status: "recording", actionCount: nextCount };
+        setOverlayPhase(message.type === "recording:step-complete" ? "complete" : "capturing", nextCount);
       }
       sendResponse({ ok: true });
       return false;

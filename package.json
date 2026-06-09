@@ -3,11 +3,22 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "description": "Record browser workflows and export them as human SOPs and machine-readable Agent Skill Packs. Local-first Chrome MV3 extension.",
+  "license": "MIT",
+  "homepage": "https://github.com/VelvetAbyss/browser-agent-recorder#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/VelvetAbyss/browser-agent-recorder.git"
+  },
+  "bugs": {
+    "url": "https://github.com/VelvetAbyss/browser-agent-recorder/issues"
+  },
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc --noEmit && vite build && BUILD_TARGET=content vite build",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "package": "npm run build && node scripts/package.mjs"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^5.0.0",

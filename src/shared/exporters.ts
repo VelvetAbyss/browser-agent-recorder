@@ -5,7 +5,7 @@ import { runtimeVariableName } from "./sanitize";
 const SKILL_PACK_FORMAT = "browser-agent-recorder.skill-pack.v2";
 
 function screenshotPath(stepNumber: number) {
-  return `screenshots/step-${String(stepNumber).padStart(3, "0")}.png`;
+  return `screenshots/step-${String(stepNumber).padStart(3, "0")}.jpg`;
 }
 
 function byActionId(screenshots: ScreenshotRecord[]) {
@@ -229,7 +229,8 @@ export function generateTaskBrief(bundle: SessionBundle) {
     "",
     "## Success Criteria",
     "",
-    "TODO: Describe what confirms the workflow is complete. If this is blank, infer likely success criteria from the final recorded step, visible page state, validations, and screenshots.",
+    bundle.session.successCriteria ||
+      "TODO: Describe what confirms the workflow is complete. If this is blank, infer likely success criteria from the final recorded step, visible page state, validations, and screenshots.",
     "",
     "## Authentication Policy",
     "",
@@ -536,6 +537,15 @@ export function generatePlaywright(bundle: SessionBundle) {
       lines.push(`  await expect(page).toHaveURL(/${escapeForTs(new URL(action.page.url).hostname)}/);`);
       return;
     }
+    if (action.type === "note") {
+      lines.push(`  // Note: ${action.description || action.title}`);
+      return;
+    }
+    if (action.type === "wait") {
+      const seconds = Number(action.value) || 2;
+      lines.push(`  await page.waitForTimeout(${Math.round(seconds * 1000)});`);
+      return;
+    }
     lines.push(`  await expect(${locator}).toBeVisible();`);
     if (action.type === "input") {
       const value = action.valuePolicy === "runtime"
@@ -626,6 +636,9 @@ function devtoolsRecorderSelectors(action: RecordedAction): string[][] {
 }
 
 function devtoolsRecorderStep(action: RecordedAction, stepNumber: number) {
+  // Manual note/wait steps have no DevTools Recorder equivalent; the real
+  // intent stays in trajectory.jsonl / human-guide.md for agent replay.
+  if (action.type === "note" || action.type === "wait") return null;
   const selectors = devtoolsRecorderSelectors(action);
   const base = {
     selectors,
@@ -678,6 +691,7 @@ export function generateDevtoolsRecorderJson(bundle: SessionBundle) {
   if (start) steps.push({ type: "navigate", url: start, assertedEvents: [{ type: "navigation", url: start }] });
   bundle.actions.forEach((action, index) => {
     const step = devtoolsRecorderStep(action, index + 1);
+    if (step === null) return;
     if (Array.isArray(step)) steps.push(...step);
     else steps.push(step);
   });

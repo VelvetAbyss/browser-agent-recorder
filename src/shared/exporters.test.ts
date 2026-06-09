@@ -54,8 +54,8 @@ const bundle: SessionBundle = {
       sessionId: "session_1",
       actionId: "action_1",
       stepNumber: 1,
-      dataUrl: "data:image/png;base64,AAAA",
-      path: "screenshots/step-001.png",
+      dataUrl: "data:image/jpeg;base64,AAAA",
+      path: "screenshots/step-001.jpg",
       createdAt: "2026-05-25T00:00:00.000Z"
     }
   ]
@@ -66,7 +66,7 @@ describe("exporters", () => {
     const guide = generateHumanGuide(bundle);
     expect(guide).toContain("# Login workflow");
     expect(guide).toContain("Runtime variable required: EMAIL");
-    expect(guide).toContain("screenshots/step-001.png");
+    expect(guide).toContain("screenshots/step-001.jpg");
   });
 
   it("generates jsonl trajectory", () => {
@@ -209,7 +209,7 @@ describe("exporters", () => {
     expect(zip.file("learning-notes.jsonl")).toBeTruthy();
     expect(zip.file("learning-notes.schema.json")).toBeTruthy();
     expect(zip.file("workflow-memory.md")).toBeTruthy();
-    expect(zip.file("screenshots/step-001.png")).toBeTruthy();
+    expect(zip.file("screenshots/step-001.jpg")).toBeTruthy();
     const manifest = await zip.file("manifest.yaml")!.async("string");
     expect(manifest).toContain("browser-agent-recorder.skill-pack.v2");
     expect(manifest).toContain("start_url: \"https://example.com/login\"");

@@ -12,7 +12,9 @@ export type ActionType =
   | "dragstart"
   | "drop"
   | "dialog"
-  | "toggle";
+  | "toggle"
+  | "note"
+  | "wait";
 
 export type RecordingStatus = "idle" | "recording";
 
@@ -63,6 +65,7 @@ export interface RecordingSession {
   id: string;
   title: string;
   summary: string;
+  successCriteria?: string;
   status: RecordingStatus;
   createdAt: string;
   updatedAt: string;
@@ -94,6 +97,8 @@ export interface RecordedAction {
   screenshotId?: string;
   createdAt: string;
   deleted?: boolean;
+  /* True for steps the user inserted by hand (note/wait), not captured. */
+  manual?: boolean;
   viewport?: ViewportInfo;
   dialog?: DialogInfo;
   frameUrl?: string;
@@ -109,10 +114,12 @@ export interface ScreenshotRecord {
   createdAt: string;
 }
 
+export type ExportType = "skill-pack" | "markdown" | "playwright" | "devtools";
+
 export interface ExportRecord {
   id: string;
   sessionId: string;
-  type: "skill-pack" | "markdown";
+  type: ExportType;
   filename: string;
   createdAt: string;
 }
@@ -124,6 +131,8 @@ export interface RecordingState {
   tabId?: number;
   tabIds?: number[];
   actionCount?: number;
+  /* Recording continues but new actions are dropped until resumed. */
+  paused?: boolean;
 }
 
 export interface DialogInfo {
@@ -169,16 +178,23 @@ export interface SessionBundle {
 export type AppMessage =
   | { type: "recording:start"; tabId?: number; url?: string; title?: string }
   | { type: "recording:stop" }
+  | { type: "recording:pause" }
+  | { type: "recording:resume" }
   | { type: "recording:get-state" }
   | { type: "action:record"; payload: ActionPayload }
   | { type: "session:list" }
   | { type: "session:get"; sessionId: string }
-  | { type: "session:update-step"; actionId: string; patch: Partial<Pick<RecordedAction, "title" | "description" | "sensitive" | "runtimeVariable" | "valuePolicy" | "highRisk">> }
+  | { type: "session:update-step"; actionId: string; patch: Partial<Pick<RecordedAction, "title" | "description" | "sensitive" | "runtimeVariable" | "valuePolicy" | "highRisk" | "target">> }
+  | { type: "session:update-meta"; sessionId: string; patch: Partial<Pick<RecordingSession, "title" | "summary" | "successCriteria">> }
   | { type: "session:delete-step"; actionId: string }
+  | { type: "session:restore-step"; actionId: string }
+  | { type: "session:deleted-steps"; sessionId: string }
+  | { type: "session:insert-step"; sessionId: string; kind: "note" | "wait"; value?: string }
   | { type: "session:reorder-steps"; sessionId: string; actionIds: string[] }
   | { type: "session:delete"; sessionId: string }
   | { type: "storage:estimate" }
-  | { type: "export:create"; sessionId: string; exportType: "skill-pack" | "markdown" };
+  | { type: "storage:clear" }
+  | { type: "export:create"; sessionId: string; exportType: ExportType };
 
 export interface StorageEstimate {
   usageBytes: number;
